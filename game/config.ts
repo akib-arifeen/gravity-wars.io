@@ -1,0 +1,229 @@
+// Every tunable number in the game lives here. Engine, bots, renderer and tests read these by
+// name, so balance can change without touching logic or breaking tests.
+//
+// Units: world units (u), seconds (s). One fixed physics step is CONFIG.dt seconds.
+
+import type { Difficulty } from "./types"
+
+export interface DifficultyProfile {
+  /** Number of rival bots in the round. */
+  bots: number
+  /** Seconds between a bot's re-decisions (its reaction time). */
+  reaction: number
+  /** 0 = aim at where prey is, 1 = aim at where prey will be (full intercept). */
+  aimLead: number
+  /** 0..1, how readily a bot commits to chasing prey instead of grazing debris. */
+  aggression: number
+  /** 0..1, how early and how hard a bot steers away from stars, black holes and bigger rivals. */
+  caution: number
+  /** Whether bots use the pull ability. */
+  usesPull: boolean
+  /** Bots never thrust harder than this fraction of full intent (a handicap on easy). */
+  thrustScale: number
+  /** Radians of random aim error added on each decision. */
+  noise: number
+  /** Start mass multiplier range for bots [min, max] relative to CONFIG.body.startMass. */
+  startMassScale: readonly [number, number]
+  /** Seconds of play before bots start hunting rivals (they graze until then). */
+  huntGrace: number
+}
+
+export const CONFIG = {
+  /** Fixed physics step (s). The render loop runs an accumulator over this. */
+  dt: 1 / 60,
+  /** Max fixed steps per rendered frame; extra backlog is dropped so a stall cannot spiral. */
+  maxStepsPerFrame: 5,
+  /** Real frame time is clamped to this (s) before it enters the accumulator. */
+  maxFrameDt: 0.25,
+
+  arena: {
+    radius: 2000,
+    /** Inward acceleration per unit of penetration past the wall (u/s² per u). */
+    wallStiffness: 30,
+  },
+
+  body: {
+    startMass: 10,
+    /** radius = radiusK * sqrt(mass) */
+    radiusK: 4,
+    /** Seconds after spawn during which a body can neither absorb nor be absorbed. */
+    spawnShield: 2.5,
+    /** Thrust acceleration at refMass (u/s²); scales by (refMass/mass)^thrustMassExp. */
+    thrustAccel: 560,
+    thrustMassExp: 0.18,
+    /** Speed thrust alone can reach at refMass (u/s); scales by (refMass/mass)^maxSpeedMassExp. */
+    maxSpeed: 340,
+    maxSpeedMassExp: 0.12,
+    refMass: 10,
+    /** Linear drag: velocity is multiplied by exp(-drag*dt) each step. */
+    drag: 1.1,
+    /**
+     * Speed cap for bodies, whatever the source (gravity slingshots included). Applied at
+     * integration (step 3e): a bounce or pull later in the same step can exceed it until the next
+     * step. Observed worst case ~1500 u/s = 25 u per step, still far below the ~80 u
+     * black-hole kill diameter, so nothing tunnels through a well.
+     */
+    hardSpeedCap: 900,
+    /** Intent vectors shorter than this count as "not thrusting". */
+    thrustDeadzone: 0.05,
+  },
+
+  energy: {
+    max: 100,
+    /** Energy per second at full thrust (scaled by intent magnitude). */
+    thrustCost: 3.5,
+    /** Energy per second while pulling. */
+    pullCost: 20,
+    /** Passive regeneration per second, always on while alive. */
+    regen: 1.5,
+    /** A "lowEnergy" event fires when energy crosses from >= this to below it. */
+    lowThreshold: 20,
+  },
+
+  absorb: {
+    /** A body can absorb another whose mass is at most mass/ratio. */
+    ratio: 1.15,
+    /** Absorption needs centre distance < big.radius - small.radius * overlap. */
+    overlap: 0.15,
+    /** Fraction of the victim's mass the eater gains. */
+    massGain: 0.85,
+    /** Fraction of the victim's energy the eater gains (clamped to max). */
+    energyGain: 0.5,
+    /** Restitution for bodies that touch but cannot absorb each other. */
+    restitution: 0.5,
+    /** A "bounce" event fires only when |impulse| / min(massA, massB) >= this (u/s). */
+    bounceEventMin: 40,
+  },
+
+  pull: {
+    /** Pull radius = baseRadius + radius * radiusPerR. */
+    baseRadius: 150,
+    radiusPerR: 3,
+    /** Peak acceleration on debris toward the puller (u/s²), falling linearly to 0 at the edge. */
+    debrisAccel: 900,
+    /** Peak acceleration on absorbable (smaller) bodies toward the puller (u/s²). */
+    bodyAccel: 460,
+  },
+
+  well: {
+    /** Gravity softening length (u): a = gm / (d² + soft²). */
+    soft: 40,
+    starCount: 2,
+    starGm: 5.0e6,
+    starRadius: 64,
+    /** Bodies whose centre is within (radius, chargeRadius) of a star recharge energy. */
+    starChargeRadius: 300,
+    /** Peak recharge (energy/s) at the star surface, falling linearly to 0 at chargeRadius. */
+    starChargeRate: 26,
+    holeGm: 9.0e6,
+    holeRadius: 34,
+    /** A body dies when centre distance < well.radius + body.radius * killOverlap. */
+    killOverlap: 0.5,
+    /** Stars are placed at a distance from the arena centre in this range. */
+    starOrbit: [700, 1000] as readonly [number, number],
+    /** The black hole is placed within this distance of the arena centre. */
+    holeOffsetMax: 350,
+  },
+
+  debris: {
+    /** Target count of dust + rock; the engine refills toward it at spawnRate per second. */
+    target: 420,
+    spawnRate: 18,
+    drag: 0.6,
+    dustMass: [0.7, 1.5] as readonly [number, number],
+    rockMass: [2.5, 5] as readonly [number, number],
+    /** Fraction of spawned debris that is rock rather than dust. */
+    rockShare: 0.25,
+    /** Debris never spawns closer than this to a well's edge. */
+    wellClearance: 60,
+  },
+
+  crystal: {
+    target: 8,
+    spawnRate: 0.3,
+    mass: 0.5,
+    /** Energy granted on pickup (clamped to max). */
+    energy: 35,
+  },
+
+  wormhole: {
+    radius: 26,
+    /** Seconds before the same body can warp again. */
+    cooldown: 2.5,
+    /** Wormholes are placed at a distance from the centre in this range. */
+    orbit: [400, 1400] as readonly [number, number],
+    /** Minimum distance between the two ends of the pair. */
+    minSeparation: 1200,
+    /** Minimum distance from any well's centre. */
+    wellClearance: 300,
+  },
+
+  spawn: {
+    /** Bodies spawn evenly spaced on a ring of this radius (random rotation per world). */
+    ringRadius: 1550,
+  },
+
+  round: {
+    /** Round length after the countdown (s). */
+    duration: 150,
+    /** Countdown before physics starts (s). */
+    countdown: 3,
+    /** First body to reach this mass wins the round. */
+    criticalMass: 130,
+  },
+
+  feel: {
+    /** Real-time freeze (s) when the player absorbs or is absorbed by a rival. */
+    hitStop: 0.07,
+  },
+
+  difficulty: {
+    easy: {
+      bots: 3,
+      reaction: 0.55,
+      aimLead: 0,
+      aggression: 0.55,
+      caution: 0.6,
+      usesPull: false,
+      thrustScale: 0.8,
+      noise: 0.35,
+      startMassScale: [0.8, 1.0],
+      huntGrace: 25,
+    },
+    normal: {
+      bots: 5,
+      reaction: 0.3,
+      aimLead: 0.5,
+      aggression: 0.9,
+      caution: 0.85,
+      usesPull: true,
+      thrustScale: 0.92,
+      noise: 0.18,
+      startMassScale: [0.9, 1.1],
+      huntGrace: 12,
+    },
+    hard: {
+      bots: 7,
+      reaction: 0.12,
+      aimLead: 1,
+      aggression: 1,
+      caution: 1,
+      usesPull: true,
+      thrustScale: 1,
+      noise: 0.06,
+      startMassScale: [1.0, 1.2],
+      huntGrace: 6,
+    },
+  } satisfies Record<Difficulty, DifficultyProfile>,
+
+  player: {
+    name: "You",
+    color: "#5ef2ff",
+  },
+
+  bots: {
+    names: ["Vega", "Rigel", "Lyra", "Orion", "Nova", "Draco", "Sirius", "Altair"],
+    // No reds or greens: those mean "threat" and "prey" on the rings.
+    colors: ["#ffb84d", "#c77dff", "#ff8fd8", "#f9f871", "#6c8cff", "#ff9f68", "#b39dff", "#cbd5e1"],
+  },
+} as const

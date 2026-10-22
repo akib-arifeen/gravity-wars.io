@@ -1,78 +1,55 @@
 # Gravity Wars
 
-A cosmic-themed multiplayer game where players battle in space using gravity manipulation and strategic gameplay.
+A single-player gravity brawler in the browser. You are a small body in an arena with stars, a
+black hole and a wormhole pair. Eat debris to grow, absorb rivals smaller than you, and avoid
+anything bigger. The first body to reach critical mass wins. So does the last one left alive.
 
-## 🎮 Game Overview
+Play it: https://gravity-warsio.vercel.app
 
-Gravity Wars is an immersive space io combat game where players harness the power of gravity to defeat opponents. Navigate through cosmic arenas, collect power-ups, and master the art of gravity manipulation to become the ultimate space warrior.
+## How a round works
 
-## ✨ Current Features
+- 3, 2, 1, go. You start on a ring with 3, 5 or 7 rival bots (Easy, Normal, Hard).
+- **Grow.** Debris adds mass. Cyan crystals restore energy.
+- **Absorb.** A rival with a green ring is small enough to eat. A red ring means it can eat you.
+- **Pull.** Hold pull to drag nearby debris and smaller rivals toward you. It drains energy.
+- **Energy.** Thrust and pull cost energy. Orbiting a star recharges it (the dashed ring). Touching a star or the black hole is fatal.
+- **Win** by reaching 130 mass or by being the last body left. If the clock runs out, the heaviest body wins.
 
-### Core Gameplay
-- Gravity-based movement and combat mechanics
-- Real-time physics simulation
-- Power-up system with various abilities
-- Score tracking and leaderboard
-- Responsive design for both desktop and mobile devices
+## Controls
 
-### Mobile Support
-- Touch controls with corner movement buttons
-- On-screen action buttons
-- Pause menu with game stats
-- Respawn functionality
-- Compact cosmic status panel
+| | Keyboard | Mouse | Touch |
+|---|---|---|---|
+| Thrust | WASD / arrows | hold left button (toward cursor) | drag on the left half |
+| Pull | Space or Shift | hold right button | hold PULL |
+| Pause | Esc or P | pause button | pause button |
+| Menu / end screen | Enter play, R restart, Q menu, M mute | | |
 
-### Visual Effects
-- Particle effects for gravity interactions
-- Cosmic-themed UI elements
-- Smooth animations and transitions
-- Responsive design elements
+The game pauses itself when the tab or iframe loses focus.
 
-## 🚀 Planned Features
+## Develop
 
-### Multiplayer Integration
-- Real-time multiplayer battles
-- Global leaderboard system
-- Custom game rooms
+```bash
+npm install
+npm run dev         # http://localhost:3000
+npm test            # vitest: engine, bots, full headless rounds
+npm run typecheck
+npm run build       # static export to out/
+```
 
-### Story Mode
-- Engaging single-player campaign
-- Unique boss battles
-- Character progression system
-- Unlockable abilities and upgrades
-- Rich narrative with cosmic lore
+To host the build under a sub-path, set `BASE_PATH` at build time:
 
-### Level System
-- Multiple themed arenas
-- Dynamic environmental hazards
-- Special gravity zones
-- Hidden collectibles
-- Progressive difficulty scaling
+```bash
+BASE_PATH=/play/gravity-wars npm run build   # assets resolve under /play/gravity-wars/
+```
 
-### Enhanced Gameplay
-- New power-up types
-- Advanced gravity mechanics
-- Special abilities and ultimate moves
-- Team-based game modes
+## How it is built
 
-### Social Features
-- Player profiles and statistics
-- Achievement system
-- Daily challenges
-- Social media integration
-- Community events
-
-## 🛠️ Technical Stack
-
-- Next.js for frontend framework
-- TypeScript for type safety
-- Tailwind CSS for styling
-- Canvas for game rendering
-- WebSocket for real-time multiplayer
-
-## 🎯 Getting Started
-
-You can try it on this link:
-https://gravity-warsio.vercel.app
-
-Join the cosmic battle in Gravity Wars! 🚀
+- `game/` is the game, written in plain TypeScript with no React and no DOM in the simulation.
+  - `engine.ts` holds the simulation. `step()` advances it one fixed 1/60 s step.
+  - `bots.ts` holds the bot brains.
+  - `config.ts` holds every tunable number.
+  - `render.ts` draws on a Canvas 2D context, interpolating between physics steps.
+  - `audio.ts` synthesises the sound with Web Audio. There are no audio files.
+  - `input.ts` handles keyboard, mouse and touch.
+- `app/` is the React shell: the menu with an attract-mode round behind it, the HUD, pause and end screens, and the fixed-timestep loop.
+- The simulation is deterministic. A seed plus a sequence of inputs replays exactly the same round. Every body, player or bot, is driven only through an `Intent` (thrust vector plus pull). That gives a multiplayer seam: a networked version would feed remote players' intents into the same `step()` call.
