@@ -42,6 +42,8 @@ To host the build under a sub-path, set `BASE_PATH` at build time:
 BASE_PATH=/play/gravity-wars npm run build   # assets resolve under /play/gravity-wars/
 ```
 
+There is also a QA hook for tests and probes: `window.__gw` gives world access, perf samples and a bot autopilot. It is available in `npm run dev`, or in a build made with `NEXT_PUBLIC_GW_DEBUG=1`, when the page is opened with `?debug`. Normal production builds don't contain it.
+
 ## How it is built
 
 - `game/` is the game, written in plain TypeScript with no React and no DOM in the simulation.

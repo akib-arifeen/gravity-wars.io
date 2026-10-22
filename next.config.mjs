@@ -9,6 +9,11 @@ const basePath = rawBase ? `/${rawBase}` : ""
 const nextConfig = {
   output: "export",
   basePath,
+  // Always defined so Next inlines it; empty in normal builds, which lets the minifier drop the
+  // debug hook in app/components/GameView.tsx entirely. Set NEXT_PUBLIC_GW_DEBUG=1 to keep it.
+  env: {
+    NEXT_PUBLIC_GW_DEBUG: process.env.NEXT_PUBLIC_GW_DEBUG ?? "",
+  },
   trailingSlash: true,
   eslint: {
     ignoreDuringBuilds: true,

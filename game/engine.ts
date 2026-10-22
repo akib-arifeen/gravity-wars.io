@@ -76,7 +76,7 @@ export interface CreateWorldOptions {
  *   startMass * a draw in the difficulty's startMassScale). All on a ring of radius
  *   CONFIG.spawn.ringRadius, evenly spaced, with one random rotation for the whole ring.
  *   Velocity 0, px/py = x/y, energy = CONFIG.energy.max, shield = CONFIG.body.spawnShield,
- *   warpCooldown 0, flags false, stats zero with peakMass = mass, alive true.
+ *   warpCooldown 0, idleTime 0, flags false, stats zero with peakMass = mass, alive true.
  * - debris: filled to CONFIG.debris.target dust/rock pieces and CONFIG.crystal.target crystals,
  *   positions uniform over the arena disc (radius sqrt-distributed) but never within
  *   well.radius + CONFIG.debris.wellClearance of a well. Dust mass in dustMass, rock in
@@ -210,6 +210,7 @@ export function createWorld(opts: CreateWorldOptions): World {
       alive: true,
       shield: CONFIG.body.spawnShield,
       warpCooldown: 0,
+      idleTime: 0,
       thrusting: false,
       pulling: false,
       charging: false,
@@ -239,7 +240,8 @@ export function createWorld(opts: CreateWorldOptions): World {
  *  3. Each ALIVE body, in array order:
  *     a. px,py = x,y. shield = max(0, shield - dt). warpCooldown = max(0, warpCooldown - dt).
  *     b. Clamp the intent vector a to length <= 1. thrusting = |a| > CONFIG.body.thrustDeadzone
- *        && energy > 0. pulling = intent.pull && energy > 0.
+ *        && energy > 0. pulling = intent.pull && energy > 0. idleTime = 0 if thrusting or
+ *        pulling, else idleTime + dt.
  *     c. Energy: e -= thrustCost*|a|*dt if thrusting; e -= pullCost*dt if pulling;
  *        e += regen*dt; charging = false; for each star with radius < d < chargeRadius
  *        (d = centre distance): charging = true, e += starChargeRate * (1 - (d - radius) /
@@ -249,6 +251,10 @@ export function createWorld(opts: CreateWorldOptions): World {
  *        (well - body) / d; skip a well when d == 0). Wall: let r = distance from the arena
  *        centre (0,0) and lim = arenaRadius - radius; if r > lim, add
  *        -(r - lim) * wallStiffness along the outward radial unit vector.
+ *        Idle safety: if kind === "player", S = CONFIG.difficulty[world.difficulty].idleSafety
+ *        is not null and idleTime >= S.after, then for each well with d > 0 and surface distance
+ *        s = d - well.radius < S.range, add S.push * gm / (d² + soft²) * (1 - max(0, s) / S.range)
+ *        along the unit vector AWAY from the well. Like gravity, it counts in vNo below.
  *        Thrust: aT = thrustAccel(mass) * a when thrusting, else 0.
  *     e. Velocity: vNo = v + (g + wall) * dt. vNew = vNo + aT * dt. If |vNew| > maxSpeed(mass)
  *        and |vNew| > |vNo|, rescale vNew to length max(maxSpeed(mass), |vNo|) (thrust cannot
@@ -377,6 +383,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     const pulling = wantPull && b.energy > 0
     b.thrusting = thrusting
     b.pulling = pulling
+    b.idleTime = thrusting || pulling ? 0 : b.idleTime + dt
 
     // c. energy
     const oldE = b.energy
@@ -409,6 +416,26 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
       const k = -(r - lim) * CONFIG.arena.wallStiffness
       accX += (b.x / r) * k
       accY += (b.y / r) * k
+    }
+    // Idle safety (player only): wells push back when the player has not acted for a while.
+    // Removing it lets an idle easy-mode player drift into stars/the black hole.
+    if (b.kind === "player") {
+      const S = CONFIG.difficulty[world.difficulty].idleSafety
+      if (S !== null && b.idleTime >= S.after) {
+        const soft2 = CONFIG.well.soft * CONFIG.well.soft
+        for (let wi = 0; wi < wells.length; wi++) {
+          const w = wells[wi]
+          const dx = b.x - w.x
+          const dy = b.y - w.y
+          const d = Math.sqrt(dx * dx + dy * dy)
+          if (d === 0) continue
+          const sd = d - w.radius
+          if (sd >= S.range) continue
+          const k = ((S.push * w.gm) / (d * d + soft2)) * (1 - Math.max(0, sd) / S.range)
+          accX += (dx / d) * k
+          accY += (dy / d) * k
+        }
+      }
     }
     let aTx = 0
     let aTy = 0

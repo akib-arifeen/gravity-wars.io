@@ -26,6 +26,21 @@ export interface DifficultyProfile {
   startMassScale: readonly [number, number]
   /** Seconds of play before bots start hunting rivals (they graze until then). */
   huntGrace: number
+  /**
+   * Beginner safety net for the PLAYER only, or null for none. After `after` seconds with no
+   * thrust or pull, wells push the player outward (see step() 3d) so a player who lets go of
+   * the controls hovers near a well instead of falling in. Active steering is never overridden.
+   */
+  idleSafety: IdleSafety | null
+}
+
+export interface IdleSafety {
+  /** Seconds without thrust or pull before the push starts. */
+  after: number
+  /** Surface distance (u) within which a well pushes back. */
+  range: number
+  /** Push at the surface as a multiple of that well's pull; > 1 so it wins near the surface. */
+  push: number
 }
 
 export const CONFIG = {
@@ -189,6 +204,8 @@ export const CONFIG = {
       noise: 0.35,
       startMassScale: [0.8, 1.0],
       huntGrace: 25,
+      // Hovers at about range * (1 - 1/push) = 90 u above a well's surface.
+      idleSafety: { after: 2, range: 240, push: 1.6 },
     },
     normal: {
       bots: 5,
@@ -201,6 +218,7 @@ export const CONFIG = {
       noise: 0.18,
       startMassScale: [0.9, 1.1],
       huntGrace: 12,
+      idleSafety: null,
     },
     hard: {
       bots: 7,
@@ -213,6 +231,7 @@ export const CONFIG = {
       noise: 0.06,
       startMassScale: [1.0, 1.2],
       huntGrace: 6,
+      idleSafety: null,
     },
   } satisfies Record<Difficulty, DifficultyProfile>,
 

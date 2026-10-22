@@ -62,6 +62,8 @@ export interface Body {
   shield: number
   /** Seconds until this body may use a wormhole again. */
   warpCooldown: number
+  /** Seconds since this body last thrust or pulled (0 while it does). Drives idle safety. */
+  idleTime: number
   /** True if thrust was applied in the most recent step. */
   thrusting: boolean
   /** True if the pull was active in the most recent step. */

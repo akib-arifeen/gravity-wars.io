@@ -1862,3 +1862,182 @@ describe("edge cases of the speed caps, precedence and the charge band", () => {
     expect(w.result?.winnerId).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------------------------
+describe("idleTime", () => {
+  it("is 0 for every body at createWorld, on every difficulty", () => {
+    for (const difficulty of DIFFICULTIES) {
+      for (const b of createWorld({ seed: 4, difficulty }).bodies) expect(b.idleTime, `${difficulty} ${b.id}`).toBe(0)
+    }
+  })
+
+  it("grows by dt per step with no intent (players and bots)", () => {
+    const w = controlledWorld({ botCount: 1 })
+    stepN(w, 25)
+    for (const b of w.bodies) expectClose(b.idleTime, 25 * DT, 1e-9, `${b.id} idleTime`)
+  })
+
+  it("resets to 0 on a step with thrust, then grows again", () => {
+    const w = controlledWorld({ botCount: 1 })
+    placeBody(w, 0, 0, 0)
+    stepN(w, 10)
+    expectClose(w.bodies[0].idleTime, 10 * DT, 1e-9)
+    step(w, { player: intent(1, 0) })
+    expect(w.bodies[0].idleTime).toBe(0)
+    step(w, {})
+    expectClose(w.bodies[0].idleTime, DT, 1e-12)
+    expectClose(w.bodies[1].idleTime, 12 * DT, 1e-9, "the other body kept idling")
+  })
+
+  it("resets to 0 on a step with pull (energy > 0)", () => {
+    const w = controlledWorld({ botCount: 1 })
+    placeBody(w, 0, 0, 0)
+    stepN(w, 10)
+    step(w, { player: intent(0, 0, true) })
+    expect(w.bodies[0].idleTime).toBe(0)
+  })
+
+  it("an intent shorter than the thrust deadzone does not reset it", () => {
+    const w = controlledWorld({ botCount: 1 })
+    placeBody(w, 0, 0, 0)
+    stepN(w, 5)
+    step(w, { player: intent(CONFIG.body.thrustDeadzone * 0.5, 0) })
+    expectClose(w.bodies[0].idleTime, 6 * DT, 1e-9)
+  })
+
+  it("keeps growing while the intent asks for thrust or pull but energy is 0", () => {
+    const w = controlledWorld({ botCount: 1 })
+    placeBody(w, 0, 0, 0)
+    w.bodies[0].idleTime = 1
+    w.bodies[0].energy = 0
+    step(w, { player: intent(1, 0, true) })
+    expect(w.bodies[0].thrusting).toBe(false)
+    expect(w.bodies[0].pulling).toBe(false)
+    expectClose(w.bodies[0].idleTime, 1 + DT, 1e-12)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+describe("idle safety push", () => {
+  const S = CONFIG.difficulty.easy.idleSafety
+  const gravityAt = (gm: number, d: number) => gm / (d * d + CONFIG.well.soft ** 2)
+
+  /** Idle body 0 at the origin, one well to its right at surface distance s; others parked far. */
+  function scene(difficulty: Difficulty, kind: "star" | "blackhole", s: number, idleTime: number) {
+    const w = controlledWorld({ difficulty, botCount: 1 })
+    placeBody(w, 0, 0, 0)
+    w.bodies[0].idleTime = idleTime
+    const probe = makeWell(kind, 0, 0)
+    const d = probe.radius + s
+    const well = addWell(w, kind, d, 0)
+    return { w, well, d }
+  }
+
+  for (const kind of ["star", "blackhole"] as const) {
+    for (const frac of [0.1, 0.25, 0.5]) {
+      it(`easy, idle player, ${kind} at s = ${frac} * range: velocity = (gravity - push*gravity*(1 - s/range)) * dt * drag`, () => {
+        const s = frac * S.range
+        const { w, well, d } = scene("easy", kind, s, S.after + 1)
+        step(w, {})
+        const g = gravityAt(well.gm, d)
+        const towardWell = g - S.push * g * (1 - s / S.range)
+        expectClose(w.bodies[0].vx, towardWell * DT * DRAG, 1e-9, "vx")
+        expectClose(w.bodies[0].vy, 0, 1e-12, "vy")
+        expectClose(w.bodies[0].x, w.bodies[0].vx * DT, 1e-9, "x")
+      })
+    }
+  }
+
+  it("easy: the push is net outward when push*(1 - s/range) > 1", () => {
+    const s = 0.1 * S.range
+    expect(S.push * (1 - s / S.range)).toBeGreaterThan(1)
+    const { w } = scene("easy", "star", s, S.after + 1)
+    step(w, {})
+    expect(w.bodies[0].vx).toBeLessThan(0)
+  })
+
+  it("easy: the push starts when idleTime reaches `after` during the step", () => {
+    const s = 0.25 * S.range
+    const { w, well, d } = scene("easy", "star", s, S.after - 0.5 * DT)
+    step(w, {})
+    const g = gravityAt(well.gm, d)
+    expectClose(w.bodies[0].vx, (g - S.push * g * (1 - s / S.range)) * DT * DRAG, 1e-9, "vx")
+  })
+
+  it("no push while idleTime is below `after` (plain gravity only)", () => {
+    const s = 0.25 * S.range
+    const { w, well, d } = scene("easy", "star", s, S.after - 2 * DT)
+    step(w, {})
+    expectClose(w.bodies[0].vx, gravityAt(well.gm, d) * DT * DRAG, 1e-9, "vx")
+  })
+
+  it("no push at or beyond the range (s >= range)", () => {
+    for (const mult of [1, 1.5]) {
+      const { w, well, d } = scene("easy", "blackhole", mult * S.range, S.after + 1)
+      step(w, {})
+      expectClose(w.bodies[0].vx, gravityAt(well.gm, d) * DT * DRAG, 1e-9, `vx at s = ${mult} * range`)
+    }
+  })
+
+  it("no push for a bot, however idle", () => {
+    const s = 0.25 * S.range
+    const w = controlledWorld({ difficulty: "easy", botCount: 1 })
+    placeBody(w, 1, 0, 0)
+    w.bodies[1].idleTime = S.after + 5
+    const probe = makeWell("star", 0, 0)
+    const well = addWell(w, "star", probe.radius + s, 0)
+    step(w, {})
+    expectClose(w.bodies[1].vx, gravityAt(well.gm, well.x) * DT * DRAG, 1e-9, "bot vx")
+  })
+
+  for (const difficulty of ["normal", "hard"] as const) {
+    it(`no push on ${difficulty} (idleSafety is null)`, () => {
+      expect(CONFIG.difficulty[difficulty].idleSafety).toBeNull()
+      const s = 0.25 * S.range
+      const { w, well, d } = scene(difficulty, "star", s, S.after + 5)
+      step(w, {})
+      expectClose(w.bodies[0].vx, gravityAt(well.gm, d) * DT * DRAG, 1e-9, "vx")
+    })
+  }
+
+  it("an actively thrusting easy player gets no push (idleTime stays 0)", () => {
+    const s = 0.25 * S.range
+    const { w, well, d } = scene("easy", "star", s, S.after + 5)
+    step(w, { player: intent(0, 1) })
+    expect(w.bodies[0].idleTime).toBe(0)
+    expectClose(w.bodies[0].vx, gravityAt(well.gm, d) * DT * DRAG, 1e-9, "vx")
+  })
+
+  function idleNearStar(difficulty: Difficulty) {
+    const w = controlledWorld({ difficulty, botCount: 1 })
+    const star = addWell(w, "star", 0, 0)
+    const p = w.bodies[0]
+    placeBody(w, 0, star.radius + p.radius * CONFIG.well.killOverlap + 10, 0)
+    // Start already idle, so the safety net is armed from the first step.
+    if (difficulty === "easy") p.idleTime = S.after
+    const park = { x: w.bodies[1].x, y: w.bodies[1].y }
+    const deaths: string[] = []
+    let steps = 0
+    for (; steps < Math.round(60 / DT) && w.bodies[0].alive; steps++) {
+      step(w, {})
+      for (const e of eventsOf(w, "death")) deaths.push(`${e.bodyId}:${e.cause.by}`)
+      // Keep the bot out of the star's pull so the round cannot end under the player.
+      placeBody(w, 1, park.x, park.y)
+    }
+    return { w, deaths, steps }
+  }
+
+  it("easy: an idle player just outside a star's kill distance survives 60 s", () => {
+    const { w, deaths, steps } = idleNearStar("easy")
+    expect(deaths).toEqual([])
+    expect(w.bodies[0].alive).toBe(true)
+    expect(steps).toBe(Math.round(60 / DT))
+    expect(w.phase).toBe("playing")
+  })
+
+  it("normal: the same idle player is pulled into the star and dies", () => {
+    const { w, deaths } = idleNearStar("normal")
+    expect(w.bodies[0].alive).toBe(false)
+    expect(deaths).toContain("player:star")
+  })
+})

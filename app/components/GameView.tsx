@@ -41,6 +41,7 @@ export interface GameViewProps {
   hideTouch?: boolean
 }
 
+const DEBUG_BUILD = process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_GW_DEBUG === "1"
 const HUD_INTERVAL_MS = 100
 const AFTERMATH_MS = 1400
 const PERF_SAMPLES = 600
@@ -116,8 +117,10 @@ export function GameView(props: GameViewProps) {
     setInput(ctl)
 
     let debug: GwDebug | null = null
-    // Probe/QA hook only: an exact ?debug parameter, not any URL that happens to contain "debug".
-    if (new URLSearchParams(window.location.search).has("debug")) {
+    // Probe/QA hook (world access + bot autopilot). Compiled in only for `next dev` or a build with
+    // NEXT_PUBLIC_GW_DEBUG=1; Next inlines both values, so a normal production build drops it.
+    // Then it still needs an exact ?debug parameter, not any URL that happens to contain "debug".
+    if (DEBUG_BUILD && new URLSearchParams(window.location.search).has("debug")) {
       debug = {
         world: () => world,
         autopilot: false,
