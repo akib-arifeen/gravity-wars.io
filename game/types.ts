@@ -6,6 +6,20 @@
 
 export type Difficulty = "easy" | "normal" | "hard"
 
+/**
+ * Arena preset (see arenas.ts). "classic" is the original layout and must stay byte-for-byte
+ * what it was before Phase A (tests and the physics reference rely on it).
+ */
+export type ArenaId = "classic" | "binary" | "maw" | "nebula" | "belt"
+
+/**
+ * "round": a timed match that ends (critical mass, last standing, time up, or player death).
+ * "endless": an .io-style arena that never ends — the player respawns, bots drop in and out, and
+ * a live leaderboard ranks everyone by mass. The leaderboard and player list are plain data, so a
+ * server can feed the same shapes in Phase C.
+ */
+export type GameMode = "round" | "endless"
+
 export interface Vec {
   x: number
   y: number
@@ -25,7 +39,18 @@ export interface Intent {
   ay: number
   /** Hold to use the pull ability (drains energy). */
   pull: boolean
+  /**
+   * Ability requests. Each is a press: the engine fires the ability on any step where the flag
+   * is true and the ability is ready (cooldown 0, enough energy / charge), otherwise ignores it.
+   * Controllers should send true for one step per key press (holding does not repeat faster
+   * than the cooldown anyway). Missing = false.
+   */
+  dash?: boolean
+  repulse?: boolean
+  ult?: boolean
 }
+
+export type PowerUpKind = "overdrive" | "magnet" | "phase" | "bulk"
 
 export type BodyKind = "player" | "bot"
 
@@ -35,6 +60,16 @@ export interface BodyStats {
   crystals: number
   rivalsAbsorbed: number
   peakMass: number
+  dashes: number
+  repulses: number
+  ults: number
+  slingshots: number
+  /** Rivals that died in a lethal well within abilities.assistWindow after this body's repulse hit them. */
+  assists: number
+  pickups: number
+  comets: number
+  /** Highest speed reached (u/s). */
+  topSpeed: number
 }
 
 /** A player or bot. bodies[0] is always the local player, id "player". */
@@ -70,12 +105,28 @@ export interface Body {
   pulling: boolean
   /** True if the body was inside a star's charge band in the most recent step. */
   charging: boolean
+  /** Seconds until dash / repulse are ready again (0 = ready). */
+  dashCd: number
+  repulseCd: number
+  /** Singularity charge 0..1; the ultimate can fire at 1. */
+  ult: number
+  /** Seconds of Singularity left (0 = not active). */
+  ultActive: number
+  /** Seconds left on each timed power-up (0 = inactive). "bulk" is instant and has no timer. */
+  power: { overdrive: number; magnet: number; phase: number }
+  /** Seconds until this body can earn another slingshot. */
+  slingCd: number
+  /** Id of the body whose repulse last hit this one ("" if none) and when (world.time). */
+  lastHitBy: string
+  lastHitAt: number
+  /** Brain profile for bots (the shell creates the brain with it); the world difficulty for the player. */
+  skill: Difficulty
   stats: BodyStats
 }
 
-export type DebrisKind = "dust" | "rock" | "crystal"
+export type DebrisKind = "dust" | "rock" | "crystal" | "comet"
 
-/** Food. Dust and rock give mass; crystals give energy (and a little mass). */
+/** Food. Dust and rock give mass; crystals give energy (and a little mass); comets are big, fast and nearly drag-free. */
 export interface Debris {
   /** Unique within a world, increasing. */
   id: number
@@ -90,20 +141,53 @@ export interface Debris {
   radius: number
 }
 
-export type WellKind = "star" | "blackhole"
+export type WellKind = "star" | "blackhole" | "whitedwarf" | "neutronstar" | "pulsar" | "planet" | "station"
+/** Wells whose surface kills on contact. */
+export type LethalWellKind = "star" | "blackhole" | "whitedwarf" | "neutronstar" | "pulsar"
 
-/** A fixed gravity source. Wells never move and are never absorbed. */
+/** Circular motion for a moving well: position = (cx, cy) + r * (cos θ, sin θ), θ = phase + w * time. */
+export interface WellOrbit {
+  cx: number
+  cy: number
+  r: number
+  /** Angular speed (rad/s); sign = direction. */
+  w: number
+  phase: number
+}
+
+/** Pulsar beams: two opposite beams at angle θ = phase + w * time (and θ + π). */
+export interface WellBeam {
+  w: number
+  phase: number
+  /** Half-width of each beam (rad). */
+  halfWidth: number
+  /** Reach from the well centre (u). */
+  length: number
+  /** Outward acceleration on bodies inside a beam (u/s²), falling linearly to 0 at `length`. */
+  accel: number
+}
+
+/** A gravity source. Wells are never absorbed. A well with an orbit moves; others are fixed. */
 export interface Well {
   id: string
   kind: WellKind
   x: number
   y: number
+  /** Current velocity (0 for fixed wells; the orbit's tangential velocity otherwise). */
+  vx: number
+  vy: number
   /** Gravitational parameter G*M (u³/s²). Acceleration at distance d is gm / (d² + soft²). */
   gm: number
-  /** Visual and lethal radius. */
+  /** Visual radius; the lethal (or solid) surface. */
   radius: number
-  /** Stars: outer edge of the recharge band. Black holes: 0. */
+  /** Outer edge of the recharge band, or 0 for no band. */
   chargeRadius: number
+  /** Peak recharge (energy/s) at the surface, falling linearly to 0 at chargeRadius. */
+  chargeRate: number
+  /** true: contact kills. false: the surface is solid and bodies bounce off (planet, station). */
+  lethal: boolean
+  orbit: WellOrbit | null
+  beam: WellBeam | null
 }
 
 /** One end of a linked wormhole pair. */
@@ -116,7 +200,62 @@ export interface Wormhole {
   linkId: string
 }
 
-export type DeathCause = { by: "body"; killerId: string } | { by: "star" } | { by: "blackhole" }
+export type DeathCause =
+  | { by: "body"; killerId: string }
+  /** assistId: the rival whose repulse hit this body within abilities.assistWindow, if any. */
+  | { by: LethalWellKind; assistId?: string }
+
+/** A timed power-up on the field. */
+export interface Pickup {
+  /** Shares the world's nextDebrisId counter. */
+  id: number
+  kind: PowerUpKind
+  x: number
+  y: number
+  /** Seconds until it fades. */
+  ttl: number
+}
+
+export type ZoneKind = "nebula" | "repulsor" | "anomaly"
+
+/**
+ * A circular region with a local rule. nebula: drag multiplied by `strength` inside.
+ * repulsor: outward push of strength * (1 - d/r) u/s². anomaly: Singularity charge +strength/s
+ * and energy +zones.anomalyEnergy/s inside. Zones may drift (vx, vy) and bounce off the arena wall.
+ */
+export interface Zone {
+  id: string
+  kind: ZoneKind
+  x: number
+  y: number
+  r: number
+  vx: number
+  vy: number
+  strength: number
+  /** Set when a cosmic event created the zone; it is removed when that event ends. */
+  eventId: number | null
+}
+
+export type CosmicKind = "meteorShower" | "solarFlare" | "gravityStorm" | "wormholeStorm" | "nebulaDrift" | "quantumAnomaly"
+
+/** The cosmic event in progress (at most one at a time). */
+export interface CosmicEvent {
+  id: number
+  kind: CosmicKind
+  stage: "warning" | "active"
+  /** Seconds spent in the current stage. */
+  t: number
+  /** Seconds of warning before it becomes active (0 = starts active). */
+  warning: number
+  /** Seconds active. */
+  duration: number
+  /** Focus point and radius (meteor shower area, anomaly/nebula zone, flare star position). */
+  x: number
+  y: number
+  r: number
+  /** Well id for a solar flare, otherwise "". */
+  targetId: string
+}
 
 export type RoundEndReason =
   /** A body reached CONFIG.round.criticalMass. */
@@ -159,6 +298,20 @@ export type GameEvent =
   | { type: "lowEnergy"; bodyId: string }
   | { type: "phase"; phase: Phase }
   | { type: "roundEnd"; result: RoundResult }
+  | { type: "dash"; bodyId: string; x: number; y: number; dx: number; dy: number }
+  | { type: "repulse"; bodyId: string; x: number; y: number; r: number }
+  | { type: "ultStart"; bodyId: string; x: number; y: number }
+  | { type: "ultEnd"; bodyId: string }
+  | { type: "ultReady"; bodyId: string }
+  | { type: "slingshot"; bodyId: string; speed: number; x: number; y: number }
+  | { type: "pickup"; bodyId: string; kind: PowerUpKind; x: number; y: number }
+  | { type: "assist"; bodyId: string; victimId: string }
+  | { type: "solidHit"; bodyId: string; wellId: string; impulse: number; x: number; y: number }
+  | { type: "cosmic"; kind: CosmicKind; stage: "warning" | "start" | "end"; x: number; y: number; r: number; targetId: string }
+  | { type: "escalation"; arenaRadius: number }
+  | { type: "respawn"; bodyId: string; x: number; y: number }
+  | { type: "join"; bodyId: string; name: string; skill: Difficulty; x: number; y: number }
+  | { type: "leave"; bodyId: string; x: number; y: number }
 
 export type Phase = "countdown" | "playing" | "over"
 
@@ -176,7 +329,14 @@ export interface World {
   time: number
   /** Seconds until time-up (CONFIG.round.duration at start). */
   timeLeft: number
+  /** Current arena wall radius (shrinks during escalation). */
   arenaRadius: number
+  arena: ArenaId
+  mode: GameMode
+  /** Endless-mode bookkeeping; null in "round" mode. */
+  endless: EndlessState | null
+  /** Arena wall radius before escalation. */
+  arenaBase: number
   /** bodies[0] is the player. Dead bodies stay in the array with alive = false. */
   bodies: Body[]
   debris: Debris[]
@@ -186,8 +346,45 @@ export interface World {
   events: GameEvent[]
   result: RoundResult | null
   nextDebrisId: number
-  /** Fractional spawn credit carried between steps (debris, crystals). */
-  spawnCredit: { debris: number; crystal: number }
+  /** Fractional spawn credit carried between steps. */
+  spawnCredit: { debris: number; crystal: number; comet: number; pickup: number }
+  pickups: Pickup[]
+  zones: Zone[]
+  cosmic: CosmicEvent | null
+  /** Seconds until the next cosmic event may start (1e9 = disabled; stays JSON-safe). */
+  nextCosmicIn: number
+  nextCosmicId: number
+  /** Where dust and rock spawn for this arena (see arenas.ts DebrisField). */
+  debrisField: { ringShare: number; ringInner: number; ringOuter: number }
+}
+
+export interface EndlessState {
+  /** Seconds until the player respawns (0 while alive). */
+  respawnIn: number
+  /** Highest mass the player has reached in this session. */
+  best: number
+  deaths: number
+  /** Rivals the player has absorbed in this session. */
+  kills: number
+  /** Id of whoever absorbed the player last ("" for a well or none), for the respawn screen. */
+  lastKillerId: string
+  /** Next number for a joining bot's id ("bot-<n>"). */
+  nextBotNo: number
+  /** Per body index: seconds until a new bot joins into that (dead/left) slot; 0 = none pending. */
+  joinIn: number[]
+  /** Seconds until the next roster rotation (a bot leaves and another joins). */
+  rotateIn: number
+}
+
+/** One leaderboard row. Same shape a server would send in Phase C. */
+export interface LeaderboardEntry {
+  id: string
+  name: string
+  color: string
+  mass: number
+  isPlayer: boolean
+  /** 1-based rank by mass among living bodies. */
+  rank: number
 }
 
 /** Compact per-frame view of the player's situation, for the HUD. */
@@ -208,4 +405,23 @@ export interface HudSnapshot {
   charging: boolean
   lowEnergy: boolean
   shield: number
+  /** Ability readiness: seconds left and the full cooldown, for HUD rings. */
+  dashCd: number
+  dashMax: number
+  repulseCd: number
+  repulseMax: number
+  /** Singularity charge 0..1 and seconds active. */
+  ult: number
+  ultActive: number
+  power: { overdrive: number; magnet: number; phase: number }
+  /** The cosmic event the HUD should announce, with seconds left in its stage. */
+  cosmic: { kind: CosmicKind; stage: "warning" | "active"; secondsLeft: number } | null
+  /** True once the arena wall has started closing in. */
+  escalating: boolean
+  arena: ArenaId
+  mode: GameMode
+  /** Endless only: respawnIn, best, deaths, kills; null in round mode. */
+  endless: { respawnIn: number; best: number; deaths: number; kills: number; lastKiller: string } | null
+  /** Top 10 living bodies by mass, plus the player's own row appended when outside the top 10. */
+  leaderboard: LeaderboardEntry[]
 }

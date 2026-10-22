@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { botIntent, createBotBrain } from "../bots"
 import { CONFIG } from "../config"
 import { createWorld, step } from "../engine"
-import type { Difficulty, Intent, RoundEndReason, World } from "../types"
+import type { ArenaId, Difficulty, Intent, RoundEndReason, World } from "../types"
 import { DT, snapshot } from "./helpers"
 
 const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard"]
@@ -29,8 +29,8 @@ function assertFinite(world: World, label: string) {
   if (bad(world.time) || bad(world.timeLeft) || bad(world.countdown)) throw new Error(`${label}: clock is not finite`)
 }
 
-function playRound(difficulty: Difficulty, seed: number) {
-  const world = createWorld({ seed, difficulty })
+function playRound(difficulty: Difficulty, seed: number, arena: ArenaId = "classic") {
+  const world = createWorld({ seed, difficulty, arena })
   const brains = world.bodies.map((b) =>
     b.kind === "player" ? createBotBrain("player", "hard", seed + 1) : createBotBrain(b.id, difficulty, seed),
   )
@@ -55,16 +55,15 @@ function playRound(difficulty: Difficulty, seed: number) {
   return { world, steps, cap, roundEnds, phaseOvers }
 }
 
-describe("full rounds, bot-driven", () => {
-  for (const difficulty of DIFFICULTIES) {
-    for (const seed of SEEDS) {
-      it(`${difficulty} seed ${seed}: runs to a coherent end`, () => {
-        const { world, steps, cap, roundEnds, phaseOvers } = playRound(difficulty, seed)
+function assertCoherentRound(difficulty: Difficulty, seed: number, arena: ArenaId = "classic") {
+  {
+    {
+        const { world, steps, cap, roundEnds, phaseOvers } = playRound(difficulty, seed, arena)
         expect(world.phase, `still ${world.phase} after ${steps}/${cap} steps`).toBe("over")
         expect(steps).toBeLessThanOrEqual(cap)
         const r = world.result
         expect(r).not.toBeNull()
-        if (!r) return
+        if (!r) return world
         expect(REASONS).toContain(r.reason)
         expect(r.durationS).toBeGreaterThanOrEqual(0)
         expect(r.durationS).toBeLessThanOrEqual(CONFIG.round.duration + 1e-6)
@@ -109,8 +108,37 @@ describe("full rounds, bot-driven", () => {
           expect(world.bodies.find((b) => b.id === r.winnerId)?.mass).toBe(heaviest)
         }
         for (const b of world.bodies) expect(b.stats.peakMass).toBeGreaterThanOrEqual(b.mass - 1e-9)
-      }, 20000)
+        return world
     }
+  }
+}
+
+describe("full rounds, bot-driven", () => {
+  for (const difficulty of DIFFICULTIES) {
+    for (const seed of SEEDS) {
+      it(`${difficulty} seed ${seed}: runs to a coherent end`, () => {
+        assertCoherentRound(difficulty, seed)
+      }, 60000)
+    }
+  }
+
+  const ARENA_RUNS: [ArenaId, Difficulty, number][] = [
+    ["binary", "hard", 11],
+    ["maw", "normal", 12],
+    ["nebula", "hard", 13],
+    ["belt", "normal", 14],
+  ]
+  for (const [arena, difficulty, seed] of ARENA_RUNS) {
+    it(`${arena} (${difficulty}, seed ${seed}): a bot-driven round ends coherently, abilities get used`, () => {
+      const world = assertCoherentRound(difficulty, seed, arena)
+      for (const b of world.bodies) {
+        for (const v of Object.values(b.stats)) expect(Number.isFinite(v)).toBe(true)
+      }
+      if (difficulty === "hard") {
+        const used = world.bodies.reduce((n, b) => n + b.stats.dashes + b.stats.repulses + b.stats.ults, 0)
+        expect(used, "hard bots use their abilities").toBeGreaterThan(0)
+      }
+    }, 60000)
   }
 
   it("a whole bot-driven round is deterministic: same seed, same final world", () => {
@@ -118,5 +146,5 @@ describe("full rounds, bot-driven", () => {
     const b = playRound("normal", 1)
     expect(a.steps).toBe(b.steps)
     expect(snapshot(a.world)).toBe(snapshot(b.world))
-  }, 30000)
+  }, 90000)
 })

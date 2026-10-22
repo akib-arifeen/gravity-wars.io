@@ -1,16 +1,26 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import type { AchievementDef } from "@/game/achievements"
+import { ARENAS, ARENA_IDS } from "@/game/arenas"
 import { CONFIG } from "@/game/config"
-import type { BodyStats, Difficulty, RoundResult } from "@/game/types"
+import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, RoundResult } from "@/game/types"
 
 const BEST_KEY = "gw:best:v1"
 
-export const DIFFICULTIES: { id: Difficulty; label: string; sub: string }[] = [
-  { id: "easy", label: "Easy", sub: "3 slow rivals" },
-  { id: "normal", label: "Normal", sub: "5 rivals that hunt" },
-  { id: "hard", label: "Hard", sub: "7 sharp rivals" },
+export const DIFFICULTIES: { id: Difficulty; label: string; sub: string; endlessSub: string }[] = [
+  { id: "easy", label: "Easy", sub: "3 slow rivals", endlessSub: "gentle start" },
+  { id: "normal", label: "Normal", sub: "5 rivals that hunt", endlessSub: "mixed skills" },
+  { id: "hard", label: "Hard", sub: "7 sharp rivals", endlessSub: "sharp from the start" },
 ]
+
+export const MODES: { id: GameMode; label: string; copy: string }[] = [
+  { id: "endless", label: "Endless", copy: "Endless \u2014 the arena never sleeps. Climb the leaderboard." },
+  { id: "round", label: "Round", copy: `3 minute match. Reach ${CONFIG.round.criticalMass} mass or be the last one left.` },
+]
+
+export type ArenaChoice = ArenaId | "random"
+export const ARENA_CHOICES: ArenaChoice[] = ["random", ...ARENA_IDS]
 
 type BestMap = Partial<Record<Difficulty, { wins: number; bestMass: number }>>
 
@@ -36,6 +46,24 @@ export function saveBest(difficulty: Difficulty, won: boolean, peakMass: number)
     window.localStorage.setItem(BEST_KEY, JSON.stringify(best))
   } catch {
     // Storage unavailable (private mode, blocked): best stats are simply not kept.
+  }
+}
+
+/** Death line shared by the round end screen and the Endless respawn overlay. */
+export function deathLine(cause: DeathCause, nameOf: (id: string) => string): string {
+  switch (cause.by) {
+    case "body":
+      return `Absorbed by ${nameOf(cause.killerId)}`
+    case "star":
+      return "Burned up in a star"
+    case "blackhole":
+      return "Lost to the black hole"
+    case "whitedwarf":
+      return "Burned up by a white dwarf"
+    case "neutronstar":
+      return "Crushed by a neutron star"
+    default:
+      return "Caught in a pulsar beam"
   }
 }
 
@@ -74,15 +102,29 @@ interface MenuProps {
   muted: boolean
   onToggleMute(): void
   layout: "desktop" | "touch"
+  arena: ArenaChoice
+  onArena(a: ArenaChoice): void
+  onStats(): void
+  mode: GameMode
+  onMode(m: GameMode): void
+  endlessBest: number
+  /** False while another panel (stats) is open on top: the menu keys then do nothing. */
+  active?: boolean
 }
 
-export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMute, layout }: MenuProps) {
+export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMute, layout, arena, onArena, onStats, mode, onMode, endlessBest, active = true }: MenuProps) {
   const [best, setBest] = useState<BestMap>({})
   const playRef = useRef<HTMLButtonElement>(null)
   const diffRef = useRef(difficulty)
   diffRef.current = difficulty
   const onDiffRef = useRef(onDifficulty)
   onDiffRef.current = onDifficulty
+  const arenaRef = useRef(arena)
+  arenaRef.current = arena
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const onArenaRef = useRef(onArena)
+  onArenaRef.current = onArena
 
   useEffect(() => {
     setBest(loadBest())
@@ -91,11 +133,18 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey) return
+      if (!activeRef.current || e.ctrlKey || e.metaKey || e.altKey) return
       const i = DIFFICULTIES.findIndex((d) => d.id === diffRef.current)
       let next = -1
-      if (e.code === "ArrowLeft" || e.code === "ArrowUp") next = Math.max(0, i - 1)
-      else if (e.code === "ArrowRight" || e.code === "ArrowDown") next = Math.min(DIFFICULTIES.length - 1, i + 1)
+      if (e.code === "ArrowUp" || e.code === "ArrowDown") {
+        const ai = ARENA_CHOICES.indexOf(arenaRef.current)
+        const an = Math.min(ARENA_CHOICES.length - 1, Math.max(0, ai + (e.code === "ArrowUp" ? -1 : 1)))
+        e.preventDefault()
+        onArenaRef.current(ARENA_CHOICES[an])
+        return
+      }
+      if (e.code === "ArrowLeft") next = Math.max(0, i - 1)
+      else if (e.code === "ArrowRight") next = Math.min(DIFFICULTIES.length - 1, i + 1)
       else if (e.code === "Digit1" || e.code === "Numpad1") next = 0
       else if (e.code === "Digit2" || e.code === "Numpad2") next = 1
       else if (e.code === "Digit3" || e.code === "Numpad3") next = 2
@@ -110,8 +159,8 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
   const b = best[difficulty]
   const controls =
     layout === "touch"
-      ? "Drag on the left to steer · hold PULL"
-      : "WASD or hold the mouse to thrust · Space or right-click to pull · Esc pauses"
+      ? "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
+      : "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
 
   return (
     <div className="gw-overlay gw-overlay-menu">
@@ -119,6 +168,24 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
         <h1 className="gw-title">GRAVITY WARS</h1>
         <p className="gw-tagline">Eat debris. Absorb smaller rivals. Don&apos;t fall in.</p>
 
+        <div className="gw-seg gw-seg-mode" role="radiogroup" aria-label="Mode">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              role="radio"
+              aria-checked={m.id === mode}
+              className="gw-seg-btn"
+              data-on={m.id === mode ? "1" : undefined}
+              onClick={() => onMode(m.id)}
+            >
+              <span className="gw-seg-name">{m.label}</span>
+            </button>
+          ))}
+        </div>
+        <p className="gw-mode-copy">{MODES.find((m) => m.id === mode)?.copy}</p>
+
+        <div className="gw-arena-label">{mode === "endless" ? "Starting skill" : "Difficulty"}</div>
         <div className="gw-seg" role="radiogroup" aria-label="Difficulty">
           {DIFFICULTIES.map((d) => (
             <button
@@ -131,26 +198,63 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
               onClick={() => onDifficulty(d.id)}
             >
               <span className="gw-seg-name">{d.label}</span>
-              <span className="gw-seg-sub">{d.sub}</span>
+              <span className="gw-seg-sub">{mode === "endless" ? d.endlessSub : d.sub}</span>
             </button>
           ))}
         </div>
 
-        <button ref={playRef} type="button" className="gw-btn gw-btn-primary gw-btn-wide" onClick={onPlay}>
-          Play
-          <span className="gw-key">Enter</span>
-        </button>
+        <div className="gw-arena-label">Arena</div>
+        <div className="gw-arenas" role="radiogroup" aria-label="Arena">
+          {ARENA_CHOICES.map((a) => (
+            <button
+              key={a}
+              type="button"
+              role="radio"
+              aria-checked={a === arena}
+              className="gw-arena-btn"
+              data-on={a === arena ? "1" : undefined}
+              onClick={() => onArena(a)}
+            >
+              {a === "random" ? "Random" : ARENAS[a].name}
+            </button>
+          ))}
+        </div>
+        <p className="gw-arena-blurb">{arena === "random" ? "A different arena every round." : ARENAS[arena].blurb}</p>
+
+        <div className="gw-sticky">
+          <button ref={playRef} type="button" className="gw-btn gw-btn-primary gw-btn-wide" onClick={onPlay}>
+            Play
+            <span className="gw-key">Enter</span>
+          </button>
+        </div>
 
         <ul className="gw-how">
-          <li>Grow by eating debris and smaller rivals.</li>
-          <li>Reach {CONFIG.round.criticalMass} mass or be the last one left.</li>
-          <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
+          {mode === "endless" ? (
+            <>
+              <li>Eat debris and smaller rivals to climb the leaderboard.</li>
+              <li>Get absorbed and you respawn in a few seconds. Rivals come and go.</li>
+              <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
+            </>
+          ) : (
+            <>
+              <li>Grow by eating debris and smaller rivals.</li>
+              <li>Reach {CONFIG.round.criticalMass} mass or be the last one left.</li>
+              <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
+            </>
+          )}
         </ul>
         <p className="gw-controls">{controls}</p>
 
         <div className="gw-menu-foot">
+          <button type="button" className="gw-btn gw-btn-ghost gw-btn-small" onClick={onStats}>
+            Stats &amp; achievements
+          </button>
           <span className="gw-best">
-            {b ? `Best on ${difficulty}: ${b.wins} ${b.wins === 1 ? "win" : "wins"}, peak mass ${b.bestMass}` : `No ${difficulty} rounds yet`}
+            {mode === "endless"
+              ? endlessBest > 0
+                ? `Endless best: mass ${endlessBest}`
+                : "No Endless sessions yet"
+              : b ? `Best on ${difficulty}: ${b.wins} ${b.wins === 1 ? "win" : "wins"}, peak mass ${b.bestMass}` : `No ${difficulty} rounds yet`}
           </span>
           <button
             type="button"
@@ -184,10 +288,12 @@ export function PauseScreen({ onResume, onRestart, onQuit }: PauseProps) {
     <div className="gw-overlay">
       <div className="gw-panel gw-pause" role="dialog" aria-modal="true" aria-label="Paused">
         <h2 className="gw-h2">Paused</h2>
-        <button ref={ref} type="button" className="gw-btn gw-btn-primary gw-btn-wide" onClick={onResume}>
-          Resume
-          <span className="gw-key">Esc</span>
-        </button>
+        <div className="gw-sticky">
+          <button ref={ref} type="button" className="gw-btn gw-btn-primary gw-btn-wide" onClick={onResume}>
+            Resume
+            <span className="gw-key">Esc</span>
+          </button>
+        </div>
         <button type="button" className="gw-btn gw-btn-wide" onClick={onRestart}>
           Restart
           <span className="gw-key">R</span>
@@ -208,6 +314,7 @@ interface EndProps {
   stats: BodyStats
   onPlayAgain(): void
   onQuit(): void
+  unlocked: AchievementDef[]
 }
 
 function reasonLine(r: RoundResult): string {
@@ -218,17 +325,14 @@ function reasonLine(r: RoundResult): string {
     return "Heaviest when the clock ran out"
   }
   if (r.reason === "playerDied" && r.playerCause) {
-    const c = r.playerCause
-    if (c.by === "body") return `Absorbed by ${nameOf(c.killerId)}`
-    if (c.by === "star") return "Burned up in a star"
-    return "Lost to the black hole"
+    return deathLine(r.playerCause, nameOf)
   }
   if (r.reason === "criticalMass") return `${nameOf(r.winnerId)} reached critical mass first`
   if (r.reason === "timeUp") return `${nameOf(r.winnerId)} out-massed you`
   return "Round over"
 }
 
-export function EndScreen({ result, stats, onPlayAgain, onQuit }: EndProps) {
+export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked }: EndProps) {
   const ref = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     ref.current?.focus({ preventScroll: true })
@@ -242,6 +346,9 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit }: EndProps) {
     ["Debris eaten", String(stats.debrisEaten)],
     ["Crystals", String(stats.crystals)],
     ["Time survived", formatTime(result.durationS)],
+    ["Slingshots", String(stats.slingshots)],
+    ["Assists", String(stats.assists)],
+    ["Pickups", String(stats.pickups)],
   ]
   return (
     <div className="gw-overlay">
@@ -258,6 +365,20 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit }: EndProps) {
           ))}
         </dl>
 
+        {unlocked.length > 0 && (
+          <div className="gw-newach">
+            <div className="gw-newach-title">New achievements</div>
+            <ul>
+              {unlocked.map((d) => (
+                <li key={d.id}>
+                  <strong>{d.name}</strong>
+                  <span>{d.description}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <ol className="gw-standings">
           {result.standings.slice(0, 6).map((s) => (
             <li key={s.id} className={s.id === "player" ? "gw-standing-you" : undefined}>
@@ -269,7 +390,7 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit }: EndProps) {
           ))}
         </ol>
 
-        <div className="gw-end-actions">
+        <div className="gw-end-actions gw-sticky">
           <button ref={ref} type="button" className="gw-btn gw-btn-primary" onClick={onPlayAgain}>
             Play again
             <span className="gw-key">Enter</span>

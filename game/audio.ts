@@ -2,9 +2,10 @@
 //
 // CONTRACT — exported signatures and documented behaviour are fixed.
 
-import type { GameEvent, World } from "./types"
+import { CONFIG } from "./config"
+import type { CosmicKind, GameEvent, PowerUpKind, World } from "./types"
 
-export type UiSound = "click" | "start" | "pause"
+export type UiSound = "click" | "start" | "pause" | "achievement"
 
 export interface Sfx {
   /**
@@ -76,6 +77,32 @@ export function createSfx(): Sfx {
   let lastCountdown = -1
   let lastTick = -1
 
+  // Phase A layers
+  let ultGain: GainNode | null = null
+  let ultFilter: BiquadFilterNode | null = null
+  let tensionGain: GainNode | null = null
+  let musicBus: GainNode | null = null
+  let ultTarget = -1
+  let tensionTarget = -1
+  let padOscs: OscillatorNode[] = []
+  let lastChord = -1
+  let nextArp = 0
+  let arpStep = 0
+  let danger = 0
+  let cosmicStinged = false
+  let escalationAlarmed = false
+  let lastJoinAt = -10
+  let lastStingAt = -100
+  let prevLeader: string | null = null
+
+  // A minor, ~10 s per chord: Am - F - C - G (three tones each, low octave pad)
+  const CHORDS: ReadonlyArray<readonly [number, number, number]> = [
+    [220, 261.63, 329.63],
+    [174.61, 261.63, 349.23],
+    [130.81, 261.63, 329.63],
+    [196, 246.94, 293.66],
+  ]
+
   function safe(fn: () => void) {
     try {
       fn()
@@ -87,7 +114,7 @@ export function createSfx(): Sfx {
   // ---- building blocks ---------------------------------------------------------------------
 
   /** One enveloped oscillator; every node is disconnected when it ends. */
-  function voice(type: OscillatorType, f0: number, f1: number, dur: number, peak: number, delay = 0, lp = 0) {
+  function voice(type: OscillatorType, f0: number, f1: number, dur: number, peak: number, delay = 0, lp = 0, att = 0.008, dest: AudioNode | null = null) {
     if (!ctx || !master) return
     const t = ctx.currentTime + delay
     const osc = ctx.createOscillator()
@@ -96,7 +123,7 @@ export function createSfx(): Sfx {
     osc.frequency.setValueAtTime(f0, t)
     if (f1 !== f0) osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur)
     gain.gain.setValueAtTime(0.0001, t)
-    gain.gain.linearRampToValueAtTime(peak, t + Math.min(0.008, dur * 0.3))
+    gain.gain.linearRampToValueAtTime(peak, t + Math.min(att, dur * 0.3))
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur)
     let filter: BiquadFilterNode | null = null
     if (lp > 0) {
@@ -108,7 +135,7 @@ export function createSfx(): Sfx {
     } else {
       osc.connect(gain)
     }
-    gain.connect(master)
+    gain.connect(dest || master)
     osc.onended = () => {
       osc.disconnect()
       if (filter) filter.disconnect()
@@ -212,6 +239,83 @@ export function createSfx(): Sfx {
     so.start()
     trem.start()
     shimmerGain = sh
+
+    // Singularity drone: saw 40 Hz + sine sub through a low-pass that opens on ultStart
+    const ug = c.createGain()
+    ug.gain.value = 0
+    const uf = c.createBiquadFilter()
+    uf.type = "lowpass"
+    uf.frequency.value = 80
+    const us = c.createOscillator()
+    us.type = "sawtooth"
+    us.frequency.value = 40
+    const ub = c.createOscillator()
+    ub.type = "sine"
+    ub.frequency.value = 40
+    const ubg = c.createGain()
+    ubg.gain.value = 1.2
+    us.connect(uf)
+    ub.connect(ubg)
+    ubg.connect(uf)
+    uf.connect(ug)
+    ug.connect(m)
+    us.start()
+    ub.start()
+    ultGain = ug
+    ultFilter = uf
+
+    // escalation tension: two detuned saws, low-passed, with a slow tremolo
+    const tg = c.createGain()
+    tg.gain.value = 0
+    const tf = c.createBiquadFilter()
+    tf.type = "lowpass"
+    tf.frequency.value = 320
+    const ta = c.createGain()
+    ta.gain.value = 0.6
+    const t1 = c.createOscillator()
+    t1.type = "sawtooth"
+    t1.frequency.value = 82
+    const t2 = c.createOscillator()
+    t2.type = "sawtooth"
+    t2.frequency.value = 83.4
+    const tl = c.createOscillator()
+    tl.frequency.value = 2.5
+    const tlg = c.createGain()
+    tlg.gain.value = 0.4
+    t1.connect(tf)
+    t2.connect(tf)
+    tf.connect(ta)
+    tl.connect(tlg)
+    tlg.connect(ta.gain)
+    ta.connect(tg)
+    tg.connect(m)
+    t1.start()
+    t2.start()
+    tl.start()
+    tensionGain = tg
+
+    // music bed: about -12 dB under the effects; pad = 3 tones x 2 detuned saws, low-passed
+    const mb = c.createGain()
+    mb.gain.value = 0.25
+    mb.connect(m)
+    const pf = c.createBiquadFilter()
+    pf.type = "lowpass"
+    pf.frequency.value = 650
+    const pg = c.createGain()
+    pg.gain.value = 0.07
+    pf.connect(pg)
+    pg.connect(mb)
+    padOscs = []
+    for (let i = 0; i < 6; i++) {
+      const o = c.createOscillator()
+      o.type = "sawtooth"
+      o.detune.value = i < 3 ? -5 : 5
+      o.frequency.value = CHORDS[0][i % 3]
+      o.connect(pf)
+      o.start()
+      padOscs.push(o)
+    }
+    musicBus = mb
   }
 
   function unlock() {
@@ -244,13 +348,15 @@ export function createSfx(): Sfx {
   function silenceLayers() {
     if (!ctx) return
     const t = ctx.currentTime
-    for (const node of [pullGain, shimmerGain]) {
+    for (const node of [pullGain, shimmerGain, ultGain, tensionGain]) {
       if (!node) continue
       node.gain.cancelScheduledValues(t)
       node.gain.setValueAtTime(0, t)
     }
     pullTarget = -1
     shimmerTarget = -1
+    ultTarget = -1
+    tensionTarget = -1
   }
 
   // ---- events ------------------------------------------------------------------------------
@@ -340,11 +446,148 @@ export function createSfx(): Sfx {
             }
             break
           }
+          case "dash": {
+            if (ev.bodyId !== "player") break
+            noise(0.2, 0.12, "bandpass", 1800, 5000, 1.2)
+            voice("sine", 400, 900, 0.15, 0.1)
+            break
+          }
+          case "repulse": {
+            if (ev.bodyId === "player") {
+              voice("sine", 90, 40, 0.4, 0.45)
+              noise(0.22, 0.3, "lowpass", 1400, 150, 0.7)
+            } else if (player) {
+              const dx = ev.x - player.x
+              const dy = ev.y - player.y
+              if (dx * dx + dy * dy < 700 * 700) voice("sine", 100, 50, 0.25, 0.12)
+            }
+            break
+          }
+          case "ultStart": {
+            if (ev.bodyId !== "player") break
+            voice("sine", 70, 28, 0.9, 0.4)
+            noise(0.5, 0.2, "lowpass", 300, 1400, 0.8)
+            if (ultFilter) {
+              ultFilter.frequency.cancelScheduledValues(now)
+              ultFilter.frequency.setValueAtTime(80, now)
+              ultFilter.frequency.setTargetAtTime(900, now, 0.2)
+            }
+            break
+          }
+          case "ultEnd": {
+            if (ev.bodyId !== "player") break
+            voice("sine", 300, 60, 0.7, 0.25)
+            noise(0.7, 0.18, "lowpass", 1200, 100, 0.7)
+            break
+          }
+          case "ultReady": {
+            if (ev.bodyId !== "player") break
+            voice("sine", 1318.5, 1318.5, 0.35, 0.1, 0, 0, 0.01)
+            voice("sine", 1760, 1760, 0.5, 0.1, 0.16, 0, 0.01)
+            break
+          }
+          case "slingshot": {
+            if (ev.bodyId !== "player") break
+            voice("sine", 300, 1400, 0.25, 0.1)
+            voice("square", 2000, 2000, 0.02, 0.05, 0.25)
+            break
+          }
+          case "pickup": {
+            if (ev.bodyId !== "player") break
+            pickupSound(ev.kind)
+            break
+          }
+          case "assist": {
+            if (ev.bodyId !== "player") break
+            voice("triangle", G5, G5, 0.15, 0.12)
+            voice("triangle", C6, C6, 0.15, 0.12, 0.06)
+            voice("triangle", 1318.5, 1318.5, 0.3, 0.12, 0.12)
+            break
+          }
+          case "solidHit": {
+            if (ev.bodyId !== "player") break
+            voice("sine", 100, 60, 0.12, Math.min(0.15, 0.04 + ev.impulse / 4000))
+            break
+          }
+          case "cosmic": {
+            if (ev.stage === "end") {
+              cosmicStinged = false
+              voice("sine", 660, 440, 0.4, 0.06, 0, 0, 0.02)
+            } else if (!cosmicStinged) {
+              cosmicStinged = true
+              cosmicSound(ev.kind)
+            }
+            break
+          }
+          case "respawn": {
+            if (ev.bodyId !== "player") break
+            voice("sine", 200, 800, 0.6, 0.15, 0, 0, 0.3)
+            voice("triangle", 400, 1200, 0.5, 0.08, 0.05, 0, 0.3)
+            break
+          }
+          case "join": {
+            if (now - lastJoinAt < 2) break
+            lastJoinAt = now
+            voice("sine", 1760, 1760, 0.3, 0.025, 0, 0, 0.02)
+            break
+          }
+          case "escalation": {
+            if (!escalationAlarmed) {
+              escalationAlarmed = true
+              voice("square", 220, 220, 0.15, 0.08, 0, 600)
+              voice("square", 220, 220, 0.15, 0.08, 0.25, 600)
+            }
+            break
+          }
           default:
             break
         }
       }
     })
+  }
+
+  function pickupSound(kind: PowerUpKind) {
+    if (kind === "overdrive") {
+      voice("triangle", 440, 440, 0.15, 0.12)
+      voice("triangle", 554.37, 554.37, 0.15, 0.12, 0.06)
+      voice("triangle", 659.25, 659.25, 0.25, 0.12, 0.12)
+    } else if (kind === "magnet") {
+      voice("sine", 1800, 1800, 0.45, 0.08)
+      voice("sine", 2713, 2713, 0.35, 0.05)
+      voice("sine", 900, 900, 0.5, 0.05)
+    } else if (kind === "phase") {
+      noise(0.45, 0.06, "bandpass", 800, 3000, 2)
+      voice("sine", 500, 900, 0.35, 0.06, 0, 0, 0.1)
+    } else {
+      voice("triangle", 110, 110, 0.4, 0.14)
+      voice("triangle", 138.59, 138.59, 0.4, 0.12)
+      voice("triangle", 164.81, 164.81, 0.4, 0.12)
+      voice("sawtooth", 55, 55, 0.35, 0.1, 0, 400)
+    }
+  }
+
+  function cosmicSound(kind: CosmicKind) {
+    switch (kind) {
+      case "solarFlare":
+        for (let k = 0; k < 3; k++) voice("square", 600, 900, 0.12, 0.07, k * 0.2, 1800)
+        break
+      case "meteorShower":
+        noise(1.2, 0.25, "lowpass", 320, 110, 0.7)
+        voice("sine", 60, 45, 1, 0.2)
+        break
+      case "gravityStorm":
+        voice("sine", 50, 90, 1.3, 0.3, 0, 0, 0.5)
+        noise(1.3, 0.12, "lowpass", 150, 700, 0.8)
+        break
+      case "wormholeStorm":
+        for (let k = 0; k < 4; k++) voice("triangle", k % 2 ? 500 : 700, k % 2 ? 500 : 700, 0.09, 0.08, k * 0.09)
+        break
+      default:
+        voice("sine", 440, 440, 1.4, 0.05, 0, 0, 0.4)
+        voice("sine", 523.25, 523.25, 1.4, 0.05, 0.05, 0, 0.4)
+        voice("sine", 659.25, 659.25, 1.4, 0.05, 0.1, 0, 0.4)
+        break
+    }
   }
 
   function update(world: World) {
@@ -363,6 +606,43 @@ export function createSfx(): Sfx {
         shimmerTarget = wantShimmer
         setLayer(shimmerGain, wantShimmer)
       }
+      const wantUlt = playing && !!player && player.alive && player.ultActive > 0 ? 0.18 : 0
+      if (wantUlt !== ultTarget && ultGain) {
+        ultTarget = wantUlt
+        setLayer(ultGain, wantUlt)
+      }
+      const escalating = playing && world.arenaRadius < world.arenaBase
+      const wantTension = escalating ? 0.05 : 0
+      if (wantTension !== tensionTarget && tensionGain) {
+        tensionTarget = wantTension
+        setLayer(tensionGain, wantTension)
+      }
+      // player takes the lead: a short bright sting, at most once per 10 s
+      let lead = ""
+      let best = -1
+      for (let i = 0; i < world.bodies.length; i++) {
+        const b = world.bodies[i]
+        if (b.alive && b.mass > best) {
+          best = b.mass
+          lead = b.id
+        }
+      }
+      if (world.phase !== "playing") prevLeader = null
+      else {
+        const t = ctx!.currentTime
+        if (prevLeader !== null && lead === "player" && prevLeader !== "player" && t - lastStingAt >= 10) {
+          lastStingAt = t
+          voice("triangle", C6, C6, 0.12, 0.12)
+          voice("triangle", 1318.5, 1318.5, 0.12, 0.12, 0.06)
+          voice("triangle", 1568, 1568, 0.25, 0.12, 0.12)
+        }
+        prevLeader = lead
+      }
+      if (world.phase === "countdown") {
+        escalationAlarmed = false
+        cosmicStinged = false
+      }
+      updateMusic(world, escalating)
       // countdown beeps
       if (world.phase === "countdown") {
         const c = Math.ceil(world.countdown)
@@ -382,11 +662,55 @@ export function createSfx(): Sfx {
     })
   }
 
+  function updateMusic(world: World, escalating: boolean) {
+    if (!ctx) return
+    const now = ctx.currentTime
+    const chord = Math.floor(now / 10) % CHORDS.length
+    if (chord !== lastChord) {
+      lastChord = chord
+      for (let i = 0; i < padOscs.length; i++) padOscs[i].frequency.setTargetAtTime(CHORDS[chord][i % 3], now, 1.2)
+    }
+    // danger raises the arpeggio: a threat within 400 u, low energy, an event, or escalation
+    const player = world.bodies[0]
+    let want = 0
+    if (world.phase === "playing" && player && player.alive) {
+      if (player.energy < CONFIG.energy.lowThreshold || world.cosmic || escalating) want = 1
+      else {
+        const bs = world.bodies
+        for (let i = 1; i < bs.length; i++) {
+          const b = bs[i]
+          if (!b.alive || b.mass < CONFIG.absorb.ratio * player.mass) continue
+          const dx = b.x - player.x
+          const dy = b.y - player.y
+          if (dx * dx + dy * dy < 400 * 400) {
+            want = 1
+            break
+          }
+        }
+      }
+    }
+    danger += (want - danger) * 0.04
+    if (danger > 0.1 && now >= nextArp && musicBus) {
+      nextArp = now + 0.36
+      arpStep++
+      if (Math.random() > 0.3) {
+        const f = CHORDS[chord][arpStep % 3] * 2 * (arpStep % 4 === 3 ? 2 : 1)
+        voice("triangle", f, f, 0.3, 0.12 * danger, 0, 2400, 0.01, musicBus)
+      }
+    }
+  }
+
   function ui(kind: UiSound) {
     if (!ctx || ctx.state !== "running") return
     safe(() => {
       if (kind === "click") {
         voice("sine", 660, 660, 0.04, 0.1)
+      } else if (kind === "achievement") {
+        voice("triangle", E5, E5, 0.16, 0.14)
+        voice("triangle", G5, G5, 0.16, 0.14, 0.09)
+        voice("triangle", C6, C6, 0.3, 0.14, 0.18)
+        voice("sine", 2093, 2093, 0.22, 0.06, 0.26)
+        noise(0.2, 0.04, "highpass", 6000, 8000, 0.7, 0.26)
       } else if (kind === "start") {
         voice("triangle", 300, 900, 0.2, 0.12)
       } else {
@@ -417,6 +741,11 @@ export function createSfx(): Sfx {
       master = null
       pullGain = null
       shimmerGain = null
+      ultGain = null
+      ultFilter = null
+      tensionGain = null
+      musicBus = null
+      padOscs = []
       noiseBuf = null
       if (c && c.state !== "closed") void c.close().catch(() => {})
     })

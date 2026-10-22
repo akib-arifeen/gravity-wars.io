@@ -13,7 +13,7 @@ export interface InputCallbacks {
 
 export interface InputController {
   /**
-   * The player's intent right now. Keyboard (WASD/arrows, normalised; Space or Shift = pull)
+   * The player's intent right now. Keyboard (WASD/arrows, normalised; Space = pull; Shift/E/Q = ability presses, see press())
    * wins over mouse when any direction key is held. Mouse: while the primary button is held on
    * the canvas, thrust toward the cursor (full strength beyond 90 px from playerScreen, scaling
    * down to 0 at 12 px); secondary button held = pull. Touch: the on-screen controls write
@@ -22,6 +22,18 @@ export interface InputController {
   read(playerScreen: Vec): Intent
   /** Joystick/pull button state from on-screen touch controls; merged with the others. */
   setVirtual(v: Intent | null): void
+  /**
+   * Queue a one-shot ability press (on-screen buttons). Keyboard presses queue the same way:
+   * Shift = dash, E = repulse, Q = Singularity (keydown, not repeat). The next read() returns the
+   * flag true once and clears it. clear() drops queued presses too.
+   */
+  press(kind: "dash" | "repulse" | "ult"): void
+  /**
+   * Enable or disable the controller (default enabled). While disabled, keydown/press() queue
+   * nothing and no key is held; disabling also clear()s. The shell disables it while paused so a
+   * press made during pause cannot fire on resume; press() semantics are otherwise unchanged.
+   */
+  setEnabled(enabled: boolean): void
   /** Drop every held key and button (on blur, pause, round end). */
   clear(): void
   dispose(): void
@@ -41,18 +53,28 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
   // True only for a mouse press that began on the canvas; a press that began on a HUD button
   // and drags over the game must not thrust.
   let pressOnCanvas = false
-  // When embedded, a drag released outside the iframe may never reach us (no pointerup, no
-  // leave). Mouse thrust therefore lapses after this long without any pointer event; the next
-  // movement resumes it. Removing this lets the ship thrust forever after such a release.
-  const MOUSE_STALE_MS = 2500
-  let lastPointerAt = 0
+  // True while the browser holds a pointer capture for our mouse press: the release is then
+  // guaranteed to reach us (even outside the iframe), so a cursor leaving must not cancel it.
+  let captured = false
+  // False while the game is paused or the round is over: key and button presses are ignored.
+  let enabled = true
   let virtual: Intent | null = null
 
   const LEFT = ["KeyA", "ArrowLeft"]
   const RIGHT = ["KeyD", "ArrowRight"]
   const UP = ["KeyW", "ArrowUp"]
   const DOWN = ["KeyS", "ArrowDown"]
-  const PULL = ["Space", "ShiftLeft", "ShiftRight"]
+  const PULL = ["Space"]
+  const ABILITY_KEYS: Record<string, "dash" | "repulse" | "ult"> = {
+    ShiftLeft: "dash",
+    ShiftRight: "dash",
+    KeyE: "repulse",
+    KeyQ: "ult",
+  }
+  const ABILITY_BY_KEY: Record<string, "dash" | "repulse" | "ult"> = { shift: "dash", e: "repulse", q: "ult" }
+  // One-shot ability presses waiting for the next read(); dropped by clear() so a press queued
+  // before a pause can never fire on resume.
+  const queued = { dash: false, repulse: false, ult: false }
   const PREVENT = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"])
 
   const held = (codes: string[]): boolean => codes.some((c) => keys.has(c))
@@ -79,6 +101,14 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
       callbacks.onPause()
       return
     }
+    // Some virtual/IME keyboards report an empty `code`; fall back to `key` only then.
+    // Paused / round over: no ability queueing and no held keys (a press must not fire on resume).
+    if (!enabled) return
+    const ability = ABILITY_KEYS[e.code] ?? (e.code === "" ? ABILITY_BY_KEY[e.key.toLowerCase()] : undefined)
+    if (ability) {
+      if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) queued[ability] = true
+      return
+    }
     keys.add(e.code)
   }
 
@@ -92,7 +122,6 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
     mx = e.clientX - r.left
     my = e.clientY - r.top
     haveMouse = true
-    lastPointerAt = performance.now()
     mouseButtons = pressOnCanvas ? e.buttons & 3 : 0
   }
 
@@ -105,6 +134,7 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
     // outside the iframe when embedded. Without it the ship keeps thrusting after release.
     try {
       canvas.setPointerCapture(e.pointerId)
+      captured = true
     } catch {
       // Pointer already gone; the window listeners still clear state on the next event.
     }
@@ -112,6 +142,13 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
 
   const onLostCapture = (e: PointerEvent) => {
     if (e.pointerType !== "mouse") return
+    captured = false
+    mouseButtons = 0
+    pressOnCanvas = false
+  }
+
+  const onLeave = () => {
+    if (captured) return
     mouseButtons = 0
     pressOnCanvas = false
   }
@@ -135,11 +172,15 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
     mouseButtons = 0
     pressOnCanvas = false
     virtual = null
+    queued.dash = queued.repulse = queued.ult = false
+    captured = false
   }
 
   window.addEventListener("keydown", onKeyDown)
   window.addEventListener("keyup", onKeyUp)
   window.addEventListener("blur", clear)
+  window.addEventListener("pointerleave", onLeave)
+  document.documentElement.addEventListener("mouseleave", onLeave)
   window.addEventListener("pointermove", onWindowPointer)
   window.addEventListener("pointerup", onWindowPointer)
   window.addEventListener("pointercancel", onPointerCancel)
@@ -157,7 +198,7 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
         const len = Math.hypot(kx, ky)
         ax = kx / len
         ay = ky / len
-      } else if ((mouseButtons & 1) !== 0 && haveMouse && performance.now() - lastPointerAt < MOUSE_STALE_MS) {
+      } else if ((mouseButtons & 1) !== 0 && haveMouse) {
         const dx = mx - playerScreen.x
         const dy = my - playerScreen.y
         const dist = Math.hypot(dx, dy)
@@ -170,9 +211,17 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
         ax = virtual.ax
         ay = virtual.ay
       }
-      const mouseFresh = performance.now() - lastPointerAt < MOUSE_STALE_MS
-      const pull = held(PULL) || ((mouseButtons & 2) !== 0 && mouseFresh) || (virtual?.pull ?? false)
-      return { ax, ay, pull }
+      const pull = held(PULL) || ((mouseButtons & 2) !== 0) || (virtual?.pull ?? false)
+      const out: Intent = { ax, ay, pull, dash: queued.dash, repulse: queued.repulse, ult: queued.ult }
+      queued.dash = queued.repulse = queued.ult = false
+      return out
+    },
+    press(kind: "dash" | "repulse" | "ult") {
+      if (enabled) queued[kind] = true
+    },
+    setEnabled(on: boolean) {
+      enabled = on
+      if (!on) clear()
     },
     setVirtual(v: Intent | null) {
       virtual = v
@@ -182,6 +231,8 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
       window.removeEventListener("keydown", onKeyDown)
       window.removeEventListener("keyup", onKeyUp)
       window.removeEventListener("blur", clear)
+      window.removeEventListener("pointerleave", onLeave)
+      document.documentElement.removeEventListener("mouseleave", onLeave)
       window.removeEventListener("pointermove", onWindowPointer)
       window.removeEventListener("pointerup", onWindowPointer)
       window.removeEventListener("pointercancel", onPointerCancel)

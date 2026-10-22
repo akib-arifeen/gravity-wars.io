@@ -1,15 +1,23 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { emptyProfile, loadProfile, type AchievementDef } from "@/game/achievements"
+import { ARENA_IDS } from "@/game/arenas"
 import { createSfx, type Sfx } from "@/game/audio"
-import type { BodyStats, Difficulty, HudSnapshot, RoundResult } from "@/game/types"
+import type { InputController } from "@/game/input"
+import type { ArenaId, BodyStats, Difficulty, GameMode, HudSnapshot, RoundResult } from "@/game/types"
 import { GameView } from "./components/GameView"
 import { Hud } from "./components/Hud"
-import { EndScreen, MenuScreen, PauseScreen, saveBest } from "./components/Screens"
+import { ProfilePanel } from "./components/Profile"
+import { ARENA_CHOICES, EndScreen, MenuScreen, PauseScreen, saveBest, type ArenaChoice } from "./components/Screens"
+import { Toasts, type ToastItem } from "./components/Toasts"
 
 type Screen = "menu" | "playing" | "paused" | "over"
 
 const MUTE_KEY = "gw:muted"
+const ARENA_KEY = "gw:arena"
+const MODE_KEY = "gw:mode"
+const TOAST_MS = 3500
 
 function noop() {}
 
@@ -22,15 +30,28 @@ export default function Page() {
   const [difficulty, setDifficulty] = useState<Difficulty>("normal")
   const [seed, setSeed] = useState(1)
   const [muted, setMuted] = useState(false)
-  const [outcome, setOutcome] = useState<{ result: RoundResult; stats: BodyStats } | null>(null)
+  const [arena, setArena] = useState<ArenaChoice>("random")
+  const [roundArena, setRoundArena] = useState<ArenaId>("classic")
+  const [mode, setMode] = useState<GameMode>("endless")
+  const [roundMode, setRoundMode] = useState<GameMode>("endless")
+  const [deathText, setDeathText] = useState("")
+  const [profileTick, setProfileTick] = useState(0)
+  const [showProfile, setShowProfile] = useState(false)
+  const [toasts, setToasts] = useState<ToastItem[]>([])
+  const [outcome, setOutcome] = useState<{ result: RoundResult; stats: BodyStats; unlocked: AchievementDef[] } | null>(null)
   const [hud, setHud] = useState<HudSnapshot | null>(null)
   const [layout, setLayout] = useState<"desktop" | "touch">("desktop")
   const [demoSeed, setDemoSeed] = useState(7)
   const [sfx, setSfx] = useState<Sfx | null>(null)
 
   const sfxRef = useRef<Sfx | null>(null)
-  const state = useRef({ screen, difficulty, muted })
-  state.current = { screen, difficulty, muted }
+  const inputRef = useRef<InputController | null>(null)
+  const profileRef = useRef(emptyProfile())
+  const toastKey = useRef(0)
+  const topRef = useRef<boolean | null>(null)
+  const lastLeadToast = useRef(0)
+  const state = useRef({ screen, difficulty, muted, arena, showProfile, mode, roundMode })
+  state.current = { screen, difficulty, muted, arena, showProfile, mode, roundMode }
 
   useEffect(() => setDemoSeed(newSeed()), [])
 
@@ -49,9 +70,21 @@ export default function Page() {
   useEffect(() => {
     try {
       if (window.localStorage.getItem(MUTE_KEY) === "1") setMuted(true)
+      const a = window.localStorage.getItem(ARENA_KEY)
+      if (a && (ARENA_CHOICES as string[]).includes(a)) setArena(a as ArenaChoice)
+      const m = window.localStorage.getItem(MODE_KEY)
+      if (m === "round" || m === "endless") setMode(m)
     } catch {
-      // Storage blocked: stay unmuted.
+      // Storage blocked: stay unmuted, default arena.
     }
+    let stored: Storage | null = null
+    try {
+      stored = window.localStorage
+    } catch {
+      stored = null
+    }
+    Object.assign(profileRef.current, loadProfile(stored))
+    setProfileTick((n) => n + 1)
     if (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) setLayout("touch")
     const onPointer = (e: PointerEvent) => {
       if (e.pointerType === "touch") setLayout("touch")
@@ -76,7 +109,50 @@ export default function Page() {
     }
   }, [])
 
+  const chooseArena = useCallback((a: ArenaChoice) => {
+    sfxRef.current?.ui("click")
+    setArena(a)
+    try {
+      window.localStorage.setItem(ARENA_KEY, a)
+    } catch {
+      // Not persisted.
+    }
+  }, [])
+
+  const chooseMode = useCallback((m: GameMode) => {
+    sfxRef.current?.ui("click")
+    setMode(m)
+    try {
+      window.localStorage.setItem(MODE_KEY, m)
+    } catch {
+      // Not persisted.
+    }
+  }, [])
+
+  const onUnlock = useCallback((defs: AchievementDef[]) => {
+    const items = defs.map((def) => ({ key: ++toastKey.current, def }))
+    setToasts((t) => [...t, ...items])
+    window.setTimeout(() => setToasts((t) => t.filter((x) => !items.some((i) => i.key === x.key))), TOAST_MS)
+  }, [])
+
+  // Endless: toast once each time the player takes the lead (the first reading is only a baseline).
+  useEffect(() => {
+    if (!hud || hud.mode !== "endless" || hud.phase !== "playing" || hud.endless === null || hud.endless.respawnIn > 0) return
+    const first = hud.leaderboard[0]?.isPlayer === true
+    if (topRef.current === false && first && Date.now() - lastLeadToast.current > 10000) {
+      lastLeadToast.current = Date.now()
+      onUnlock([{ id: "lead", name: "You're #1", description: "Top of the leaderboard." }])
+    }
+    topRef.current = first
+  }, [hud, onUnlock])
+
   const play = useCallback(() => {
+    const choice = state.current.arena
+    setRoundMode(state.current.mode)
+    setDeathText("")
+    topRef.current = null
+    setRoundArena(choice === "random" ? ARENA_IDS[Math.floor(Math.random() * ARENA_IDS.length)] : choice)
+    setToasts([])
     sfxRef.current?.unlock()
     sfxRef.current?.ui("start")
     setHud(null)
@@ -88,6 +164,7 @@ export default function Page() {
   const toMenu = useCallback(() => {
     sfxRef.current?.ui("click")
     setHud(null)
+    setToasts([])
     setScreen("menu")
   }, [])
 
@@ -105,9 +182,9 @@ export default function Page() {
     setScreen((s) => (s === "paused" ? "playing" : s))
   }, [])
 
-  const handleEnd = useCallback((result: RoundResult, stats: BodyStats) => {
+  const handleEnd = useCallback((result: RoundResult, stats: BodyStats, unlocked: AchievementDef[]) => {
     saveBest(state.current.difficulty, result.playerWon, stats.peakMass)
-    setOutcome({ result, stats })
+    setOutcome({ result, stats, unlocked })
     setScreen("over")
   }, [])
 
@@ -125,7 +202,9 @@ export default function Page() {
         fn()
       }
       if (e.code === "KeyM") return handle(toggleMute)
-      if (s === "menu") {
+      if (s === "menu" && state.current.showProfile) {
+        if (e.code === "Escape") handle(() => setShowProfile(false))
+      } else if (s === "menu") {
         if ((e.code === "Enter" || e.code === "NumpadEnter") && !onControl) handle(play)
       } else if (s === "over") {
         if (((e.code === "Enter" || e.code === "NumpadEnter") && !onControl) || e.code === "KeyR") handle(play)
@@ -159,6 +238,7 @@ export default function Page() {
           onHud={noop}
           onEnd={noop}
           onPauseRequest={noop}
+          arena="classic"
           onGesture={noop}
           onLayout={noop}
         />
@@ -167,6 +247,15 @@ export default function Page() {
         <GameView
           difficulty={difficulty}
           seed={seed}
+          arena={roundArena}
+          mode={roundMode}
+          onDeath={setDeathText}
+          profile={profileRef.current}
+          onUnlock={onUnlock}
+          onInputReady={(c) => {
+            inputRef.current = c
+          }}
+          hud={hud}
           paused={screen === "paused"}
           initialLayout={layout}
           hideTouch={screen !== "playing"}
@@ -179,7 +268,16 @@ export default function Page() {
         />
       )}
       {(screen === "playing" || screen === "paused") && (
-        <Hud inert={screen === "paused"} hud={hud} muted={muted} onPause={pauseNow} onToggleMute={toggleMute} />
+        <Hud
+          inert={screen === "paused"}
+          hud={hud}
+          muted={muted}
+          layout={layout}
+          deathText={deathText}
+          onPress={(k) => inputRef.current?.press(k)}
+          onPause={pauseNow}
+          onToggleMute={toggleMute}
+        />
       )}
       {screen === "menu" && (
         <MenuScreen
@@ -192,11 +290,22 @@ export default function Page() {
           muted={muted}
           onToggleMute={toggleMute}
           layout={layout}
+          arena={arena}
+          mode={mode}
+          onMode={chooseMode}
+          active={!showProfile}
+          endlessBest={Math.round(profileRef.current.stats.endlessBest) + profileTick * 0}
+          onArena={chooseArena}
+          onStats={() => setShowProfile(true)}
         />
       )}
+      {screen === "menu" && showProfile && (
+        <ProfilePanel profile={profileRef.current} onClose={() => setShowProfile(false)} />
+      )}
+      {screen !== "menu" && <Toasts items={toasts} layout={layout} />}
       {screen === "paused" && <PauseScreen onResume={resume} onRestart={play} onQuit={toMenu} />}
       {screen === "over" && outcome && (
-        <EndScreen result={outcome.result} stats={outcome.stats} onPlayAgain={play} onQuit={toMenu} />
+        <EndScreen result={outcome.result} stats={outcome.stats} onPlayAgain={play} onQuit={toMenu} unlocked={outcome.unlocked} />
       )}
     </div>
   )

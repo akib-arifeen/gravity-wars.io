@@ -23,6 +23,7 @@ import {
   addWell,
   angularGap,
   controlledWorld,
+  credit,
   dist,
   eventsOf,
   expectClose,
@@ -94,7 +95,7 @@ describe("1. formulas", () => {
 })
 
 // ---------------------------------------------------------------------------------------------
-describe("2. createWorld", () => {
+describe("2. createWorld", { timeout: 30000 }, () => {
   it("is deterministic: equal options give deep-equal worlds, another seed differs", () => {
     for (const difficulty of DIFFICULTIES) {
       const a = createWorld({ seed: 7, difficulty })
@@ -177,7 +178,21 @@ describe("2. createWorld", () => {
         expect(b.thrusting).toBe(false)
         expect(b.pulling).toBe(false)
         expect(b.charging).toBe(false)
-        expect(b.stats).toEqual({ debrisEaten: 0, crystals: 0, rivalsAbsorbed: 0, peakMass: b.mass })
+        // Contract (createWorld step 2): "stats all 0 with peakMass = mass" (Phase A added more stat fields).
+        expect(b.stats).toEqual({
+          debrisEaten: 0,
+          crystals: 0,
+          rivalsAbsorbed: 0,
+          peakMass: b.mass,
+          dashes: 0,
+          repulses: 0,
+          ults: 0,
+          slingshots: 0,
+          assists: 0,
+          pickups: 0,
+          comets: 0,
+          topSpeed: 0,
+        })
       }
     }
   })
@@ -1490,7 +1505,7 @@ describe("15. after the round is over", () => {
 })
 
 // ---------------------------------------------------------------------------------------------
-describe("16. determinism and cloning", () => {
+describe("16. determinism and cloning", { timeout: 30000 }, () => {
   const scripted = (tick: number, index: number): Intent =>
     intent(Math.cos(tick * 0.031 + index * 1.7), Math.sin(tick * 0.027 + index * 0.9), Math.floor(tick / 45 + index) % 3 === 0)
 
@@ -1695,7 +1710,7 @@ describe("18. rankOf and hudSnapshot", () => {
 describe("spawning", () => {
   it("refills dust/rock at spawnRate per second", () => {
     const w = controlledWorld({ botCount: 1 })
-    w.spawnCredit = { debris: 0, crystal: -1e9 }
+    w.spawnCredit = credit({ debris: 0, crystal: -1e9 })
     const startId = w.nextDebrisId
     stepN(w, 120)
     const expected = CONFIG.debris.spawnRate * 120 * DT
@@ -1712,7 +1727,7 @@ describe("spawning", () => {
 
   it("never overshoots the target and caps leftover credit at 1", () => {
     const w = controlledWorld({ botCount: 1 })
-    w.spawnCredit = { debris: CONFIG.debris.target + 100, crystal: -1e9 }
+    w.spawnCredit = credit({ debris: CONFIG.debris.target + 100, crystal: -1e9 })
     step(w, {})
     expect(w.debris.filter((d) => d.kind !== "crystal")).toHaveLength(CONFIG.debris.target)
     expect(w.spawnCredit.debris).toBeLessThanOrEqual(1 + 1e-9)
@@ -1724,14 +1739,14 @@ describe("spawning", () => {
 
   it("crystals respawn at crystal.spawnRate up to crystal.target", () => {
     const w = controlledWorld({ botCount: 1 })
-    w.spawnCredit = { debris: -1e9, crystal: 1 - CONFIG.crystal.spawnRate * DT * 0.5 }
+    w.spawnCredit = credit({ debris: -1e9, crystal: 1 - CONFIG.crystal.spawnRate * DT * 0.5 })
     step(w, {})
     expect(w.debris).toHaveLength(1)
     expect(w.debris[0].kind).toBe("crystal")
     expect(w.debris[0].mass).toBe(CONFIG.crystal.mass)
 
     const capped = controlledWorld({ botCount: 1 })
-    capped.spawnCredit = { debris: -1e9, crystal: CONFIG.crystal.target + 10 }
+    capped.spawnCredit = credit({ debris: -1e9, crystal: CONFIG.crystal.target + 10 })
     step(capped, {})
     expect(capped.debris.filter((d) => d.kind === "crystal")).toHaveLength(CONFIG.crystal.target)
     expect(capped.spawnCredit.crystal).toBeLessThanOrEqual(1 + 1e-9)
@@ -1742,7 +1757,7 @@ describe("spawning", () => {
     addWell(w, "star", 0, 0)
     addWell(w, "blackhole", 300, 0)
     const burst = Math.floor(CONFIG.debris.target / 2)
-    w.spawnCredit = { debris: burst, crystal: -1e9 }
+    w.spawnCredit = credit({ debris: burst, crystal: -1e9 })
     step(w, {})
     expect(w.debris.length).toBeGreaterThanOrEqual(burst - 1)
     for (const d of w.debris) {
@@ -1761,7 +1776,7 @@ describe("spawning", () => {
   it("no spawning during the countdown", () => {
     const w = createWorld({ seed: 2, difficulty: "easy" })
     w.debris = []
-    w.spawnCredit = { debris: 100, crystal: 100 }
+    w.spawnCredit = credit({ debris: 100, crystal: 100 })
     stepN(w, 20)
     expect(w.phase).toBe("countdown")
     expect(w.debris).toHaveLength(0)

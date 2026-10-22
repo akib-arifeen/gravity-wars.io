@@ -192,6 +192,133 @@ export const CONFIG = {
     hitStop: 0.07,
   },
 
+  // ---- Phase A: abilities, slingshot, power-ups, comets, new wells, zones, cosmic events ------
+
+  abilities: {
+    /** Dash: an instant velocity kick along the thrust direction (or the velocity if coasting). */
+    dash: { cost: 14, cooldown: 2.2, impulse: 420 },
+    /** Repulse: a radial shockwave. Radius = radius + body.radius * radiusPerR. */
+    repulse: { cost: 22, cooldown: 6, radius: 230, radiusPerR: 2.5, impulse: 520, debrisImpulse: 650 },
+    /**
+     * Singularity ultimate. Charge: absorbing a rival adds victim.mass / chargeMass; eating debris
+     * adds debris.mass * debrisShare / chargeMass. While active: pull radius and accel multiplied,
+     * pull costs no energy, and the absorb ratio drops to absorbRatio.
+     */
+    ult: { chargeMass: 30, debrisShare: 0.25, duration: 5, pullRadiusMul: 2.2, pullAccelMul: 1.8, absorbRatio: 1.05 },
+    /** Seconds after a repulse hit during which a well death credits the repulser (assist). */
+    assistWindow: 3,
+  },
+
+  slingshot: {
+    /**
+     * A body earns a slingshot when, after a step, it is within band * well.radius + 60 of a
+     * well's centre, moving faster than minSpeedMul * maxSpeed(mass), and slingCd == 0.
+     * Reward: energy and Singularity charge; then slingCd = cooldown.
+     */
+    minSpeedMul: 1.15,
+    band: 4,
+    energy: 12,
+    ult: 0.08,
+    cooldown: 3,
+  },
+
+  powerups: {
+    /** Expected spawns per second while fewer than `max` are on the field. */
+    spawnRate: 1 / 12,
+    max: 2,
+    ttl: 20,
+    /** Pick up when centre distance < body.radius + radius. */
+    radius: 16,
+    overdrive: { duration: 12, regenMul: 3 },
+    magnet: { duration: 10, radiusMul: 2 },
+    phase: { duration: 4 },
+    bulk: { mass: 12 },
+  },
+
+  comets: {
+    spawnRate: 1 / 9,
+    max: 3,
+    mass: [6, 10] as readonly [number, number],
+    speed: [380, 520] as readonly [number, number],
+    drag: 0.02,
+  },
+
+  /** Per-kind parameters for the wells added in Phase A (stars and black holes keep `well`). */
+  wellKinds: {
+    whitedwarf: { gm: 2.6e6, radius: 18, chargeRadius: 120, chargeRate: 18, lethal: true },
+    neutronstar: { gm: 3.4e6, radius: 10, chargeRadius: 0, chargeRate: 0, lethal: true },
+    pulsar: { gm: 2.0e6, radius: 22, chargeRadius: 140, chargeRate: 14, lethal: true },
+    planet: { gm: 1.4e6, radius: 48, chargeRadius: 0, chargeRate: 0, lethal: false },
+    station: { gm: 0, radius: 26, chargeRadius: 150, chargeRate: 30, lethal: false },
+  },
+  pulsarBeam: { w: 0.6, halfWidth: 0.12, length: 1100, accel: 700 },
+  /** Restitution for bodies bouncing off a solid (non-lethal) well surface. */
+  solidRestitution: 0.4,
+
+  zones: {
+    /** Default drag multiplier inside a nebula zone. */
+    nebulaDrag: 3,
+    repulsorAccel: 420,
+    /** Singularity charge per second inside an anomaly. */
+    anomalyUlt: 0.12,
+    /** Energy per second inside an anomaly. */
+    anomalyEnergy: 8,
+  },
+
+  cosmic: {
+    /** Seconds of play before the first event, and between events (uniform in each range). */
+    firstIn: [18, 26] as readonly [number, number],
+    gap: [24, 38] as readonly [number, number],
+    meteorShower: { warning: 2, duration: 9, rate: 14, radius: 380 },
+    solarFlare: { warning: 3, duration: 5, radiusMul: 2.4 },
+    gravityStorm: { warning: 2, duration: 10, gmMul: 1.6 },
+    wormholeStorm: { warning: 1.5, duration: 9, every: 3 },
+    nebulaDrift: { warning: 0, duration: 16, radius: 360, speed: 60, drag: 3 },
+    quantumAnomaly: { warning: 0, duration: 12, radius: 200 },
+  },
+
+  escalation: {
+    /** In the last `last` seconds the arena wall closes linearly to `shrinkTo` * arenaBase. */
+    last: 30,
+    shrinkTo: 0.72,
+  },
+
+  /** Endless (.io-style) mode. */
+  endless: {
+    /** Bots in the arena (the roster rotates; the count stays constant). */
+    bots: 10,
+    /** Seconds before the player respawns after dying. */
+    respawnDelay: 3,
+    /** Spawn protection after a respawn or join (s). */
+    respawnShield: 3.5,
+    /** Seconds before a new bot fills a slot freed by a death; uniform in the range. */
+    joinDelay: [2, 7] as readonly [number, number],
+    /** Seconds between voluntary roster rotations; uniform in the range. */
+    rotateEvery: [20, 40] as readonly [number, number],
+    /** Seconds before a rotated-out slot is refilled. */
+    rotateJoinDelay: 1.5,
+    /** Mass decay: bodies above `above` lose (mass - above) * rate per second. */
+    decayAbove: 70,
+    decayRate: 0.03,
+    /**
+     * Skill drift with the player's current mass m: pHard = clamp((m - hardFrom) / hardSpan, 0, hardMax);
+     * pEasy = clamp(easyBase - m / easySpan, easyMin, easyBase); pNormal = the rest.
+     */
+    hardFrom: 25,
+    hardSpan: 120,
+    hardMax: 0.6,
+    easyBase: 0.5,
+    easySpan: 80,
+    easyMin: 0.1,
+    /** Joining bots start at startMass * U(0.8, 1.0) * (1 + growth * clamp(m / 100, 0, 1)) where m is the player's mass. */
+    joinGrowth: 1.5,
+    /** Extra names for joining bots (no emoji; chosen to avoid names currently in play). */
+    names: [
+      "Vega", "Rigel", "Lyra", "Orion", "Nova", "Draco", "Sirius", "Altair", "Deneb", "Mira", "Castor", "Pollux",
+      "Spica", "Antares", "Elara", "Kepler", "Halley", "Juno", "Talos", "Zenith", "Quasar", "Nebula", "Cygnus", "Hydra",
+    ],
+  },
+
   difficulty: {
     easy: {
       bots: 3,

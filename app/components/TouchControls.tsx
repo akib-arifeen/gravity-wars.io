@@ -1,13 +1,17 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, type PointerEvent as RPointerEvent } from "react"
+import { CONFIG } from "@/game/config"
 import type { InputController } from "@/game/input"
+import type { HudSnapshot } from "@/game/types"
+import { AbilityIcon } from "./Icons"
 
-const KNOB_MAX = 56
+const KNOB_BASE = 56
 const DEADZONE = 0.12
 
 interface Props {
   input: InputController
+  hud?: HudSnapshot | null
   onGesture?: () => void
 }
 
@@ -16,7 +20,7 @@ interface Props {
  * Joystick listeners sit on the parent stage so mouse clicks on a hybrid device still reach
  * the canvas; only non-mouse pointers are handled here.
  */
-export function TouchControls({ input, onGesture }: Props) {
+export function TouchControls({ input, hud = null, onGesture }: Props) {
   const layerRef = useRef<HTMLDivElement>(null)
   const baseRef = useRef<HTMLDivElement>(null)
   const knobRef = useRef<HTMLDivElement>(null)
@@ -36,6 +40,8 @@ export function TouchControls({ input, onGesture }: Props) {
     const pullBtn = pullRef.current
     if (!layer || !host || !base || !knob || !ghost || !pullBtn) return
 
+    // The stick scales with the layout (tablets get larger controls via --s in CSS).
+    const knobMax = () => (base.offsetWidth > 0 ? base.offsetWidth / 2 : KNOB_BASE)
     let stickId: number | null = null
     let pullId: number | null = null
     let ox = 0
@@ -55,13 +61,13 @@ export function TouchControls({ input, onGesture }: Props) {
       let dx = e.clientX - ox
       let dy = e.clientY - oy
       const len = Math.hypot(dx, dy)
-      if (len > KNOB_MAX) {
-        dx = (dx / len) * KNOB_MAX
-        dy = (dy / len) * KNOB_MAX
+      if (len > knobMax()) {
+        dx = (dx / len) * knobMax()
+        dy = (dy / len) * knobMax()
       }
       knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`
-      const nx = dx / KNOB_MAX
-      const ny = dy / KNOB_MAX
+      const nx = dx / knobMax()
+      const ny = dy / knobMax()
       if (Math.hypot(nx, ny) < DEADZONE) {
         ax = 0
         ay = 0
@@ -75,7 +81,7 @@ export function TouchControls({ input, onGesture }: Props) {
     const onDown = (e: PointerEvent) => {
       if (e.pointerType === "mouse") return
       gestureRef.current?.()
-      if ((e.target as Element | null)?.closest("[data-gw-pull]")) return
+      if ((e.target as Element | null)?.closest("[data-gw-pull], [data-gw-ability]")) return
       const r = host.getBoundingClientRect()
       const x = e.clientX - r.left
       const y = e.clientY - r.top
@@ -159,6 +165,19 @@ export function TouchControls({ input, onGesture }: Props) {
     }
   }, [input])
 
+  const ab = CONFIG.abilities
+  const energy = hud?.energy ?? 100
+  const press = (kind: "dash" | "repulse" | "ult") => (e: RPointerEvent) => {
+    if (e.pointerType === "mouse") return
+    e.preventDefault()
+    gestureRef.current?.()
+    input.press(kind)
+  }
+  const cd = (left: number | undefined, max: number | undefined) => (left && max ? Math.min(100, (left / max) * 100) : 0)
+  const ultCharge = hud?.ult ?? 0
+  const ultReady = ultCharge >= 1
+  const ultActive = (hud?.ultActive ?? 0) > 0
+
   return (
     <div ref={layerRef} className="gw-touch" aria-hidden="true">
       <div ref={ghostRef} className="gw-stick-ghost" />
@@ -167,6 +186,36 @@ export function TouchControls({ input, onGesture }: Props) {
       </div>
       <div ref={pullRef} className="gw-pull" data-gw-pull="1">
         PULL
+      </div>
+      <div
+        className="gw-abtn gw-abtn-dash"
+        data-gw-ability="dash"
+        data-low={energy < ab.dash.cost ? "1" : undefined}
+        style={{ ["--p" as string]: cd(hud?.dashCd, hud?.dashMax) }}
+        onPointerDown={press("dash")}
+      >
+        <AbilityIcon kind="dash" />
+        <span className="gw-abtn-label">DASH</span>
+      </div>
+      <div
+        className="gw-abtn gw-abtn-repulse"
+        data-gw-ability="repulse"
+        data-low={energy < ab.repulse.cost ? "1" : undefined}
+        style={{ ["--p" as string]: cd(hud?.repulseCd, hud?.repulseMax) }}
+        onPointerDown={press("repulse")}
+      >
+        <AbilityIcon kind="repulse" />
+        <span className="gw-abtn-label">REPULSE</span>
+      </div>
+      <div
+        className="gw-abtn gw-abtn-ult"
+        data-gw-ability="ult"
+        data-ready={ultReady || ultActive ? "1" : undefined}
+        style={{ ["--p" as string]: 100 - Math.min(100, ultCharge * 100) }}
+        onPointerDown={press("ult")}
+      >
+        <AbilityIcon kind="ult" />
+        <span className="gw-abtn-label">{ultActive ? `${Math.ceil(hud?.ultActive ?? 0)}s` : ultReady ? "READY" : "ULT"}</span>
       </div>
     </div>
   )
