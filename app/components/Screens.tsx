@@ -157,10 +157,12 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
   }, [])
 
   const b = best[difficulty]
-  const controls =
-    layout === "touch"
-      ? "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
-      : "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
+  const touch =
+    layout === "touch" ||
+    (typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches)
+  const controls = touch
+    ? "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
+    : "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
 
   return (
     <div className="gw-overlay gw-overlay-menu">
