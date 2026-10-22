@@ -770,3 +770,1096 @@ body {
     animation: none;
   }
 }
+
+/* =====================================================================================
+   Phase A: ability buttons, ability bar, power-up chips, cosmic banner, toasts, arena
+   picker, profile panel. Appended after the base rules so these win on equal specificity.
+   ===================================================================================== */
+
+/* ---------- touch layout: sizes scale with --s (tablets get larger controls) ---------- */
+
+.gw-touch {
+  --s: 1;
+  --u: calc(1px * var(--s));
+  --gw-r: calc(24 * var(--u) + env(safe-area-inset-right, 0px));
+  --gw-b: calc(24 * var(--u) + env(safe-area-inset-bottom, 0px));
+}
+
+@media (pointer: coarse) and (min-width: 700px) {
+  .gw-touch {
+    --s: 1.35;
+  }
+}
+
+.gw-stick-ghost,
+.gw-stick-base {
+  width: calc(112 * var(--u, 1px));
+  height: calc(112 * var(--u, 1px));
+}
+
+.gw-stick-ghost {
+  left: calc(28 * var(--u, 1px) + env(safe-area-inset-left, 0px));
+  bottom: calc(28 * var(--u, 1px) + env(safe-area-inset-bottom, 0px));
+}
+
+.gw-stick-knob {
+  width: calc(52 * var(--u, 1px));
+  height: calc(52 * var(--u, 1px));
+}
+
+.gw-pull {
+  right: var(--gw-r);
+  bottom: calc(var(--gw-b) + 4 * var(--u));
+  width: calc(76 * var(--u));
+  height: calc(76 * var(--u));
+}
+
+.gw-abtn {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: calc(56 * var(--u));
+  height: calc(56 * var(--u));
+  border-radius: 50%;
+  color: #e8f6ff;
+  border: 2px solid rgba(94, 242, 255, 0.55);
+  background:
+    conic-gradient(rgba(2, 3, 10, 0.72) calc(var(--p, 0) * 1%), transparent 0),
+    rgba(94, 242, 255, 0.16);
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-touch-callout: none;
+}
+
+.gw-abtn svg {
+  width: calc(22 * var(--u));
+  height: calc(22 * var(--u));
+}
+
+.gw-abtn-label {
+  font-size: calc(9 * var(--u));
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
+.gw-abtn[data-low="1"] {
+  opacity: 0.5;
+}
+
+.gw-abtn:active {
+  border-color: #e8f6ff;
+}
+
+.gw-abtn-dash {
+  right: calc(var(--gw-r) + 84 * var(--u));
+  bottom: calc(var(--gw-b) + 4 * var(--u));
+}
+
+.gw-abtn-repulse {
+  right: calc(var(--gw-r) + 80 * var(--u));
+  bottom: calc(var(--gw-b) + 74 * var(--u));
+}
+
+.gw-abtn-ult {
+  width: calc(64 * var(--u));
+  height: calc(64 * var(--u));
+  right: calc(var(--gw-r) + 6 * var(--u));
+  bottom: calc(var(--gw-b) + 90 * var(--u));
+  border-color: rgba(199, 125, 255, 0.6);
+  background:
+    conic-gradient(rgba(2, 3, 10, 0.72) calc(var(--p, 100) * 1%), transparent 0),
+    rgba(199, 125, 255, 0.16);
+}
+
+.gw-abtn[data-ready="1"].gw-abtn-ult {
+  border-color: #c77dff;
+  box-shadow: 0 0 18px rgba(199, 125, 255, 0.8);
+  animation: gw-glow 1s ease-in-out infinite;
+}
+
+@keyframes gw-glow {
+  50% {
+    box-shadow: 0 0 6px rgba(199, 125, 255, 0.4);
+  }
+}
+
+/* ---------- HUD additions ---------- */
+
+.gw-hud-leftcol {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.gw-hud-leftcol .gw-hud-panel {
+  position: static;
+}
+
+.gw-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.gw-chip {
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: 1px solid currentColor;
+  background: rgba(2, 3, 10, 0.4);
+}
+
+.gw-chip-od {
+  color: #ffb84d;
+}
+
+.gw-chip-mg {
+  color: #5ef2ff;
+}
+
+.gw-chip-ph {
+  color: #c77dff;
+}
+
+.gw-cosmic {
+  width: min(260px, calc(100vw - 144px));
+  padding: 7px 10px 8px;
+  border-radius: 10px;
+  background: rgba(6, 10, 24, 0.7);
+  border: 1px solid rgba(94, 242, 255, 0.3);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: gw-slide 0.3s ease-out both;
+}
+
+.gw-cosmic-warning {
+  border-color: rgba(255, 184, 77, 0.75);
+}
+
+.gw-cosmic-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.gw-cosmic-warning .gw-cosmic-title {
+  color: #ffb84d;
+}
+
+.gw-cosmic-text {
+  margin-top: 1px;
+  font-size: 12px;
+  color: rgba(232, 246, 255, 0.85);
+}
+
+.gw-cosmic-bar {
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: rgba(232, 246, 255, 0.14);
+  overflow: hidden;
+}
+
+.gw-cosmic-fill {
+  height: 100%;
+  background: #5ef2ff;
+}
+
+.gw-cosmic-warning .gw-cosmic-fill {
+  background: #ffb84d;
+}
+
+@keyframes gw-slide {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (min-width: 760px) {
+  .gw-cosmic {
+    position: fixed;
+    top: calc(76px + env(safe-area-inset-top, 0px));
+    left: 50%;
+    width: 320px;
+    margin-left: -160px;
+    text-align: center;
+  }
+}
+
+.gw-wall-icon {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 6px;
+  color: #ff4d6d;
+}
+
+.gw-wall-banner {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 24px);
+  padding: 8px 18px;
+  border-radius: 10px;
+  text-align: center;
+  font-size: clamp(16px, 4.5vw, 26px);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #ff4d6d;
+  background: rgba(6, 10, 24, 0.7);
+  border: 1px solid rgba(255, 77, 109, 0.7);
+  animation: gw-pop 0.4s ease-out both;
+}
+
+.gw-countdown-arena {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #5ef2ff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+}
+
+/* desktop ability bar */
+
+.gw-abilities {
+  position: absolute;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+}
+
+.gw-slot {
+  pointer-events: auto;
+  position: relative;
+  width: 58px;
+  height: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+  border-radius: 12px;
+  color: #e8f6ff;
+  border: 1px solid rgba(94, 242, 255, 0.4);
+  background:
+    conic-gradient(rgba(2, 3, 10, 0.72) calc(var(--p, 0) * 1%), transparent 0),
+    rgba(6, 10, 24, 0.62);
+  cursor: pointer;
+  touch-action: manipulation;
+  font: inherit;
+}
+
+.gw-slot:hover {
+  border-color: #5ef2ff;
+}
+
+.gw-slot[data-low="1"] {
+  opacity: 0.5;
+}
+
+.gw-slot:focus-visible {
+  outline: 3px solid #5ef2ff;
+  outline-offset: 2px;
+}
+
+.gw-slot-key {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: rgba(232, 246, 255, 0.8);
+}
+
+.gw-slot[data-ready="1"] {
+  border-color: #c77dff;
+  box-shadow: 0 0 16px rgba(199, 125, 255, 0.75);
+  animation: gw-glow 1s ease-in-out infinite;
+}
+
+/* ---------- compact HUD column ---------- */
+
+@media (max-width: 479px) {
+  .gw-hud-leftcol {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    gap: 6px;
+  }
+
+  .gw-chip {
+    font-size: 9px;
+    padding: 1px 4px;
+  }
+
+  .gw-cosmic {
+    padding: 5px 8px 6px;
+  }
+
+  .gw-cosmic-title,
+  .gw-cosmic-text {
+    font-size: 11px;
+  }
+}
+
+/* tablets (coarse pointer, wide): scale the HUD up with the touch controls */
+
+@media (pointer: coarse) and (min-width: 700px) {
+  .gw-hud-panel {
+    width: 250px;
+    padding: 12px 14px 10px;
+  }
+
+  .gw-hud-mass-value {
+    font-size: 40px;
+  }
+
+  .gw-hud-mass-max {
+    font-size: 16px;
+  }
+
+  .gw-hud-label {
+    font-size: 12px;
+  }
+
+  .gw-bar {
+    height: 10px;
+  }
+
+  .gw-hud-status {
+    font-size: 12px;
+  }
+
+  .gw-hud-timer {
+    font-size: 38px;
+  }
+
+  .gw-hud-rank {
+    font-size: 15px;
+  }
+
+  .gw-icon-btn {
+    width: 52px;
+    height: 52px;
+  }
+
+  .gw-chip {
+    font-size: 12px;
+    padding: 3px 8px;
+  }
+
+  .gw-cosmic {
+    width: 380px;
+    margin-left: -190px;
+  }
+
+  .gw-cosmic-title {
+    font-size: 15px;
+  }
+
+  .gw-cosmic-text {
+    font-size: 14px;
+  }
+}
+
+/* ---------- toasts ---------- */
+
+.gw-toasts {
+  position: fixed;
+  z-index: 30;
+  top: calc(64px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  width: min(300px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.gw-toasts[data-layout="touch"] {
+  right: auto;
+  left: 50%;
+  margin-left: calc(min(300px, 100vw - 24px) / -2);
+  top: calc(132px + env(safe-area-inset-top, 0px));
+}
+
+@media (max-width: 479px) {
+  .gw-toasts[data-layout="touch"] {
+    top: calc(200px + env(safe-area-inset-top, 0px));
+  }
+}
+
+.gw-toast {
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(6, 10, 24, 0.88);
+  border: 1px solid rgba(123, 237, 159, 0.6);
+  animation: gw-slide 0.3s ease-out both;
+}
+
+.gw-toast-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7bed9f;
+}
+
+.gw-toast-name {
+  margin-top: 1px;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.gw-toast-desc {
+  font-size: 12px;
+  color: rgba(232, 246, 255, 0.78);
+}
+
+/* ---------- menu: arena picker ---------- */
+
+.gw-arena-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-arenas {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.gw-arena-btn {
+  min-height: 44px;
+  padding: 4px 6px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: #e8f6ff;
+  background: rgba(232, 246, 255, 0.05);
+  border: 1px solid rgba(232, 246, 255, 0.16);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.gw-arena-btn[data-on="1"] {
+  background: rgba(94, 242, 255, 0.16);
+  border-color: #5ef2ff;
+}
+
+.gw-arena-btn:focus-visible {
+  outline: 3px solid #5ef2ff;
+  outline-offset: 2px;
+}
+
+.gw-arena-blurb {
+  margin: 6px 0 12px;
+  min-height: 2.6em;
+  font-size: 12px;
+  line-height: 1.3;
+  color: rgba(232, 246, 255, 0.7);
+}
+
+.gw-menu-foot {
+  flex-wrap: wrap;
+}
+
+/* ---------- end screen: new achievements ---------- */
+
+.gw-stats {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.gw-newach {
+  margin: 0 0 14px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(123, 237, 159, 0.08);
+  border: 1px solid rgba(123, 237, 159, 0.4);
+}
+
+.gw-newach-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #7bed9f;
+}
+
+.gw-newach ul {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.gw-newach li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 2px 0;
+}
+
+.gw-newach li span {
+  color: rgba(232, 246, 255, 0.7);
+  font-size: 12px;
+}
+
+/* ---------- profile panel ---------- */
+
+.gw-profile {
+  max-width: 600px;
+  text-align: left;
+}
+
+.gw-profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.gw-h2-left {
+  margin: 0;
+  text-align: left;
+}
+
+.gw-h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin: 16px 0 8px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.gw-count {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: #7bed9f;
+}
+
+.gw-stats-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.gw-ach {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gw-ach li {
+  display: grid;
+  grid-template-columns: 130px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 6px;
+  border-bottom: 1px solid rgba(232, 246, 255, 0.08);
+  font-size: 13px;
+}
+
+.gw-ach-name {
+  font-weight: 800;
+}
+
+.gw-ach-desc {
+  color: rgba(232, 246, 255, 0.75);
+}
+
+.gw-ach-date {
+  font-size: 11px;
+  color: #7bed9f;
+}
+
+.gw-ach-off {
+  opacity: 0.5;
+}
+
+.gw-ach-on .gw-ach-name {
+  color: #7bed9f;
+}
+
+@media (max-width: 519px) {
+  .gw-stats-4 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .gw-ach li {
+    grid-template-columns: 1fr auto;
+  }
+
+  .gw-ach-desc {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
+/* tablets: roomier menus, larger tap targets */
+
+@media (pointer: coarse) and (min-width: 700px) {
+  .gw-menu {
+    max-width: 640px;
+  }
+
+  .gw-end,
+  .gw-profile {
+    max-width: 680px;
+  }
+
+  .gw-arena-btn {
+    min-height: 52px;
+    font-size: 15px;
+  }
+
+  .gw-seg-btn {
+    min-height: 68px;
+  }
+
+  .gw-btn {
+    min-height: 54px;
+  }
+
+  .gw-btn-small {
+    min-height: 48px;
+    font-size: 14px;
+  }
+
+  .gw-how {
+    font-size: 15px;
+  }
+
+  .gw-controls,
+  .gw-arena-blurb,
+  .gw-best {
+    font-size: 14px;
+  }
+
+  .gw-ach li {
+    font-size: 15px;
+  }
+}
+
+@media (max-height: 600px) {
+  .gw-arena-blurb {
+    margin: 4px 0 8px;
+    min-height: 0;
+  }
+
+  .gw-ach li {
+    padding: 5px 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gw-cosmic,
+  .gw-toast,
+  .gw-wall-banner,
+  .gw-abtn[data-ready="1"].gw-abtn-ult,
+  .gw-slot[data-ready="1"] {
+    animation: none;
+  }
+}
+
+/* =====================================================================================
+   Endless mode: mode selector, score panel, leaderboard, respawn overlay
+   ===================================================================================== */
+
+.gw-seg-mode {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 8px;
+}
+
+.gw-seg-mode .gw-seg-btn {
+  min-height: 48px;
+}
+
+.gw-mode-copy {
+  margin: 0 0 14px;
+  min-height: 2.6em;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(232, 246, 255, 0.82);
+}
+
+.gw-hud-kd {
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(232, 246, 255, 0.7);
+  white-space: nowrap;
+}
+
+.gw-hud-tag {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: rgba(94, 242, 255, 0.75);
+}
+
+.gw-hud-arena {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: rgba(232, 246, 255, 0.9);
+  white-space: nowrap;
+}
+
+/* leaderboard */
+
+.gw-lb {
+  position: absolute;
+  top: calc(60px + env(safe-area-inset-top, 0px));
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  width: 210px;
+  padding: 8px 10px 6px;
+  border-radius: 12px;
+  text-align: left;
+  color: #e8f6ff;
+  font: inherit;
+  background: rgba(6, 10, 24, 0.62);
+  border: 1px solid rgba(94, 242, 255, 0.22);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.gw-lb-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-lb-more {
+  letter-spacing: 0.06em;
+  color: #5ef2ff;
+}
+
+.gw-lb-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.gw-lb-list li {
+  display: grid;
+  grid-template-columns: 18px 10px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.gw-lb-gap {
+  margin-top: 4px;
+  border-top: 1px dashed rgba(232, 246, 255, 0.25);
+  border-radius: 0 !important;
+  padding-top: 5px !important;
+}
+
+.gw-lb-you {
+  background: rgba(94, 242, 255, 0.16);
+  font-weight: 800;
+}
+
+.gw-lb-rank {
+  color: rgba(232, 246, 255, 0.6);
+  font-size: 11px;
+}
+
+.gw-lb-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gw-lb-mass {
+  font-weight: 700;
+}
+
+/* touch: below the minimap, never over the controls; a tap expands it */
+
+.gw-lb-touch {
+  pointer-events: auto;
+  top: calc(184px + env(safe-area-inset-top, 0px));
+  width: 148px;
+  max-height: calc(100vh - 184px - 190px - env(safe-area-inset-bottom, 0px));
+  max-height: calc(100dvh - 184px - 190px - env(safe-area-inset-bottom, 0px));
+  min-height: 44px;
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.gw-lb-touch[data-open="1"] {
+  overflow-y: auto;
+}
+
+.gw-lb-touch:focus-visible {
+  outline: 3px solid #5ef2ff;
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) and (min-width: 700px) {
+  .gw-lb-touch {
+    width: 220px;
+    top: calc(190px + env(safe-area-inset-top, 0px));
+    max-height: calc(100dvh - 190px - 280px - env(safe-area-inset-bottom, 0px));
+  }
+
+  .gw-lb-list {
+    font-size: 16px;
+  }
+
+  .gw-lb-list li {
+    padding: 4px 4px;
+  }
+
+  .gw-lb-head {
+    font-size: 12px;
+  }
+
+  .gw-hud-arena {
+    font-size: 18px;
+  }
+
+  .gw-hud-tag {
+    font-size: 13px;
+  }
+
+  .gw-hud-kd {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 479px) {
+  .gw-hud-kd {
+    font-size: 10px;
+  }
+
+  .gw-hud-arena {
+    font-size: 12px;
+  }
+
+  .gw-hud-tag {
+    font-size: 9px;
+  }
+
+  .gw-lb-touch .gw-lb-list {
+    font-size: 12px;
+  }
+}
+
+/* respawn overlay */
+
+.gw-death {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  background: rgba(2, 3, 10, 0.42);
+  pointer-events: none;
+}
+
+.gw-death-box {
+  max-width: 360px;
+  padding: 16px 22px;
+  border-radius: 14px;
+  text-align: center;
+  background: rgba(6, 10, 24, 0.78);
+  border: 1px solid rgba(255, 77, 109, 0.5);
+}
+
+.gw-death-cause {
+  font-size: clamp(18px, 5vw, 24px);
+  font-weight: 800;
+  color: #ff4d6d;
+}
+
+.gw-death-count {
+  margin-top: 6px;
+  font-size: clamp(16px, 4.5vw, 20px);
+  font-weight: 700;
+}
+
+.gw-death-stats {
+  margin-top: 6px;
+  font-size: 13px;
+  color: rgba(232, 246, 255, 0.7);
+}
+
+.gw-back {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-size: clamp(16px, 4.5vw, 24px);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: #7bed9f;
+  background: rgba(6, 10, 24, 0.7);
+  border: 1px solid rgba(123, 237, 159, 0.6);
+  animation: gw-pop 0.4s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gw-back {
+    animation: none;
+  }
+}
+
+@media (max-height: 600px) {
+  .gw-mode-copy {
+    margin-bottom: 8px;
+    min-height: 0;
+  }
+}
+
+/* =====================================================================================
+   Review fixes: sticky primary buttons, landscape leaderboard pill, tablet banner, contrast
+   ===================================================================================== */
+
+/* Sticky primary action: stays reachable when a short viewport scrolls the panel. */
+.gw-panel {
+  --gw-px: 22px;
+}
+
+@media (max-width: 479px) {
+  .gw-panel {
+    --gw-px: 14px;
+  }
+}
+
+@media (max-height: 600px) {
+  .gw-panel {
+    --gw-px: 16px;
+  }
+}
+
+.gw-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 0 calc(-1 * var(--gw-px));
+  padding: 14px var(--gw-px) 6px;
+  background: linear-gradient(to bottom, rgba(6, 10, 24, 0), rgba(6, 10, 24, 0.94) 38%);
+}
+
+.gw-sticky .gw-btn-wide {
+  margin-top: 0;
+}
+
+/* Landscape phones and short iframes in the touch layout (the pill and .gw-lb-touch only render
+   there, so no pointer query is needed): the leaderboard becomes a rank pill in the
+   top-centre column that opens a dropdown, so it never sits above REPULSE / ULT. */
+
+.gw-lb-pill,
+.gw-lb-drop {
+  display: none;
+}
+
+@media (max-height: 600px) {
+  .gw-lb-touch {
+    display: none;
+  }
+
+  .gw-lb-pill {
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 76px;
+    min-height: 44px;
+    margin-top: 2px;
+    padding: 0 12px;
+    border-radius: 22px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 800;
+    color: #e8f6ff;
+    background: rgba(6, 10, 24, 0.7);
+    border: 1px solid rgba(94, 242, 255, 0.4);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .gw-lb-drop[data-open="1"] {
+    pointer-events: auto;
+    display: block;
+    top: calc(96px + env(safe-area-inset-top, 0px));
+    right: auto;
+    left: 50%;
+    width: 220px;
+    margin-left: -110px;
+    max-height: calc(100dvh - 96px - 8px);
+    overflow-y: auto;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  .gw-hud-rank-ed {
+    display: none;
+  }
+}
+
+/* Coarse tablets 760-919 px: the centred banner would cover the (wider) left panel, so keep it
+   stacked under that panel instead. */
+@media (pointer: coarse) and (min-width: 760px) and (max-width: 919px) {
+  .gw-cosmic {
+    position: static;
+    width: 250px;
+    margin-left: 0;
+    text-align: left;
+  }
+}
+
+/* Locked achievements: solid dim colours (not opacity) so text keeps >= 4.5:1 on the panel. */
+.gw-ach-off {
+  opacity: 1;
+}
+
+.gw-ach-off .gw-ach-name {
+  color: #aab6c6;
+}
+
+.gw-ach-off .gw-ach-desc {
+  color: #94a3b6;
+}

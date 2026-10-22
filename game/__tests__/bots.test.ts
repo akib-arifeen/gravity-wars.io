@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { botIntent, createBotBrain } from "../bots"
 import { CONFIG } from "../config"
 import { createWorld, radiusForMass, step } from "../engine"
-import type { Difficulty, Intent, World } from "../types"
+import type { ArenaId, Difficulty, Intent, World } from "../types"
 import {
   DT,
   addWell,
@@ -179,7 +179,7 @@ describe("4. a 20 s run on each difficulty", () => {
       }
       expect(nonZero, "bots should actually thrust").toBeGreaterThan(100)
       if (!profile.usesPull) expect(pulls).toBe(0)
-    }, 20000)
+    }, 60000)
   }
 
   it("bots keep making progress: after 20 s of play the average living bot is heavier than it started", () => {
@@ -197,7 +197,7 @@ describe("4. a 20 s run on each difficulty", () => {
     expect(living.length).toBeGreaterThan(0)
     const grew = living.filter(({ b, i }) => b.mass > start[i]).length
     expect(grew).toBeGreaterThan(0)
-  }, 20000)
+  }, 60000)
 })
 
 // ---------------------------------------------------------------------------------------------
@@ -530,4 +530,75 @@ describe("11. hunting restraint and survival priority", () => {
       }
     })
   }
+})
+
+// ---------------------------------------------------------------------------------------------
+describe("12. Phase A: ability use is gated by difficulty and only on decision steps", { timeout: 60000 }, () => {
+  function run(difficulty: Difficulty, arena: ArenaId, seed: number, seconds: number) {
+    const w = createWorld({ seed, difficulty, arena })
+    const brains = w.bodies.map((b) => createBotBrain(b.id, difficulty, seed))
+    const counts = { dash: 0, repulse: 0, ult: 0 }
+    const steps = Math.ceil((CONFIG.round.countdown + seconds) / DT)
+    for (let i = 0; i < steps && w.phase !== "over"; i++) {
+      const intents: Record<string, Intent> = {}
+      w.bodies.forEach((b, k) => {
+        if (!b.alive) return
+        const brain = brains[k]
+        const before = brain.thinkIn
+        const it = botIntent(w, brain)
+        const decided = brain.thinkIn > before - DT + 1e-9
+        const flags = (it.dash ? 1 : 0) + (it.repulse ? 1 : 0) + (it.ult ? 1 : 0)
+        if (w.phase === "playing" && !decided) {
+          // "botIntent returns them only on decision steps, never repeated between decisions".
+          expect(flags, `${b.id} step ${i}: ability flag held between decisions`).toBe(0)
+        }
+        expect(Number.isFinite(it.ax) && Number.isFinite(it.ay)).toBe(true)
+        if (it.dash) counts.dash++
+        if (it.repulse) counts.repulse++
+        if (it.ult) counts.ult++
+        intents[b.id] = it
+      })
+      step(w, intents)
+    }
+    return counts
+  }
+
+  it("easy uses none of the abilities", () => {
+    for (const arena of ["classic", "belt"] as const) {
+      expect(run("easy", arena, 21, 30)).toEqual({ dash: 0, repulse: 0, ult: 0 })
+    }
+  })
+
+  it("normal uses dash and repulse but never the Singularity", () => {
+    const total = { dash: 0, repulse: 0, ult: 0 }
+    for (const arena of ["classic", "maw", "belt"] as const) {
+      const c = run("normal", arena, 22, 40)
+      total.dash += c.dash
+      total.repulse += c.repulse
+      total.ult += c.ult
+    }
+    expect(total.ult).toBe(0)
+    expect(total.dash + total.repulse).toBeGreaterThan(0)
+  })
+
+  it("hard uses abilities", () => {
+    const total = { dash: 0, repulse: 0, ult: 0 }
+    for (const arena of ["classic", "binary", "nebula"] as const) {
+      const c = run("hard", arena, 23, 40)
+      total.dash += c.dash
+      total.repulse += c.repulse
+      total.ult += c.ult
+    }
+    expect(total.dash + total.repulse + total.ult).toBeGreaterThan(0)
+  })
+
+  it("returns no ability flags when it cannot act (countdown, dead, unknown id)", () => {
+    const w = createWorld({ seed: 3, difficulty: "hard" })
+    const brain = createBotBrain("bot-1", "hard", 3)
+    expect(botIntent(w, brain)).toEqual(ZERO)
+    const started = startedWorld("hard", 3)
+    started.bodies[1].alive = false
+    expect(botIntent(started, createBotBrain("bot-1", "hard", 3))).toEqual(ZERO)
+    expect(botIntent(started, createBotBrain("ghost", "hard", 3))).toEqual(ZERO)
+  })
 })

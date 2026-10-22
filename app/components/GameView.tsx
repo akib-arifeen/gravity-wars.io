@@ -2,12 +2,15 @@
 
 import { useEffect, useRef, useState } from "react"
 import { createBotBrain, botIntent, type BotBrain } from "@/game/bots"
+import { ARENA_IDS } from "@/game/arenas"
+import { finishEndlessSession, type EndlessFold, finishRound, newTracker, saveProfile, trackStep, type AchievementDef, type Profile } from "@/game/achievements"
 import { CONFIG } from "@/game/config"
 import { createWorld, hudSnapshot, step } from "@/game/engine"
 import { createInput, type InputController } from "@/game/input"
 import { createRenderer, type RenderView } from "@/game/render"
 import type { Sfx } from "@/game/audio"
-import type { BodyStats, Difficulty, HudSnapshot, Intent, RoundResult, World } from "@/game/types"
+import { deathLine } from "./Screens"
+import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, HudSnapshot, Intent, RoundResult, World } from "@/game/types"
 import { TouchControls } from "./TouchControls"
 
 interface GwDebug {
@@ -26,10 +29,14 @@ declare global {
 export interface GameViewProps {
   difficulty: Difficulty
   seed: number
+  arena: ArenaId
+  /** Defaults to "round". Endless never ends: no onEnd; the session folds into the profile on unmount. */
+  mode?: GameMode
   paused: boolean
   sfx: Sfx
   onHud(h: HudSnapshot): void
-  onEnd(r: RoundResult, playerStats: BodyStats): void
+  /** `unlocked` = every achievement earned this round (mid-round and round-end). */
+  onEnd(r: RoundResult, playerStats: BodyStats, unlocked: AchievementDef[]): void
   onPauseRequest(): void
   onGesture(): void
   onLayout(l: "desktop" | "touch"): void
@@ -37,10 +44,25 @@ export interface GameViewProps {
   demo?: boolean
   /** Layout known by the page (covers hybrid devices that have already seen touch). */
   initialLayout?: "desktop" | "touch"
+  /** Endless: the player died; `text` is the death line for the respawn overlay. */
+  onDeath?(text: string): void
+  /** Lifetime profile, mutated in place by achievement tracking (never in demo mode). */
+  profile?: Profile
+  /** Achievements unlocked mid-round, for toasts. */
+  onUnlock?(defs: AchievementDef[]): void
+  /** The live input controller (null in demo / before mount), so the HUD can press abilities. */
+  onInputReady?(ctl: InputController | null): void
+  /** Latest HUD snapshot, used for the touch buttons' cooldown and charge rings. */
+  hud?: HudSnapshot | null
   /** Hide the on-screen touch controls (paused / round over). */
   hideTouch?: boolean
 }
 
+function deathText(world: World, cause: DeathCause): string {
+  return deathLine(cause, (id) => world.bodies.find((b) => b.id === id)?.name ?? "a rival")
+}
+
+const DEBUG_BUILD = process.env.NODE_ENV === "development" || process.env.NEXT_PUBLIC_GW_DEBUG === "1"
 const HUD_INTERVAL_MS = 100
 const AFTERMATH_MS = 1400
 const PERF_SAMPLES = 600
@@ -51,9 +73,10 @@ function pushSample(buf: number[], v: number) {
 }
 
 export function GameView(props: GameViewProps) {
-  const { seed, sfx, paused } = props
+  const { seed, sfx, paused, arena } = props
   const demo = props.demo === true
   const difficulty: Difficulty = demo ? "normal" : props.difficulty
+  const mode: GameMode = demo ? "round" : props.mode ?? "round"
   const stageRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [layout, setLayout] = useState<"desktop" | "touch">("desktop")
@@ -78,13 +101,27 @@ export function GameView(props: GameViewProps) {
     setLayout(curLayout)
     propsRef.current.onLayout(curLayout)
 
-    let world: World = createWorld({ seed, difficulty })
+    const pickArena = (): ArenaId => (demo ? ARENA_IDS[Math.floor(Math.random() * ARENA_IDS.length)] : arena)
+    let world: World = createWorld({ seed, difficulty, arena: pickArena(), mode })
+    let tracker = newTracker()
+    const roundUnlocked: AchievementDef[] = []
+    const store = (): Storage | null => {
+      try {
+        return window.localStorage
+      } catch {
+        return null
+      }
+    }
     const brains = new Map<string, BotBrain>()
     let autopilotBrain: BotBrain
+    let brainSeed = seed
+    let joins = 0
     const setupBrains = (sd: number) => {
       brains.clear()
+      brainSeed = sd
+      joins = 0
       world.bodies.forEach((b, i) => {
-        if (b.kind === "bot") brains.set(b.id, createBotBrain(b.id, difficulty, sd + i * 7919))
+        if (b.kind === "bot") brains.set(b.id, createBotBrain(b.id, b.skill ?? difficulty, sd + i * 7919))
       })
       autopilotBrain = createBotBrain("player", "hard", sd + 1)
     }
@@ -116,8 +153,10 @@ export function GameView(props: GameViewProps) {
     setInput(ctl)
 
     let debug: GwDebug | null = null
-    // Probe/QA hook only: an exact ?debug parameter, not any URL that happens to contain "debug".
-    if (new URLSearchParams(window.location.search).has("debug")) {
+    // Probe/QA hook (world access + bot autopilot). Compiled in only for `next dev` or a build with
+    // NEXT_PUBLIC_GW_DEBUG=1; Next inlines both values, so a normal production build drops it.
+    // Then it still needs an exact ?debug parameter, not any URL that happens to contain "debug".
+    if (DEBUG_BUILD && new URLSearchParams(window.location.search).has("debug")) {
       debug = {
         world: () => world,
         autopilot: false,
@@ -189,6 +228,10 @@ export function GameView(props: GameViewProps) {
         while (acc >= CONFIG.dt && steps < CONFIG.maxStepsPerFrame && !isOver()) {
           intents.clear()
           const player = world.bodies[0]
+          if (!player.alive && ctl) {
+            // Drain presses queued while dead so they cannot fire on respawn.
+            ctl.read(renderer.playerScreen())
+          }
           if (player.alive) {
             intents.set(
               "player",
@@ -199,13 +242,44 @@ export function GameView(props: GameViewProps) {
           }
           for (const b of world.bodies) {
             if (b.kind !== "bot" || !b.alive) continue
-            const brain = brains.get(b.id)
-            if (brain) intents.set(b.id, botIntent(world, brain))
+            let brain = brains.get(b.id)
+            if (!brain) {
+              // A bot that joined (Endless) or whose slot was reused gets its own brain at its skill.
+              brain = createBotBrain(b.id, b.skill ?? difficulty, brainSeed + ++joins)
+              brains.set(b.id, brain)
+            }
+            intents.set(b.id, botIntent(world, brain))
           }
           step(world, intents)
           renderer.onEvents(world, world.events)
+          const prof = propsRef.current.profile
+          if (!demo && prof) {
+            const got = trackStep(prof, tracker, world, world.events, Date.now())
+            if (got.length > 0) {
+              roundUnlocked.push(...got)
+              saveProfile(store(), prof)
+              propsRef.current.sfx.ui("achievement")
+              propsRef.current.onUnlock?.(got)
+            }
+          }
           if (!demo) propsRef.current.sfx.onEvents(world, world.events)
           for (const ev of world.events) {
+            if (ev.type === "join" || ev.type === "respawn" || ev.type === "leave") {
+              forceHud = true
+              if (ev.type === "join" && world.mode === "endless") {
+                const jb = world.bodies.find((b) => b.id === ev.bodyId)
+                brains.set(ev.bodyId, createBotBrain(ev.bodyId, jb?.skill ?? ev.skill, brainSeed + ++joins))
+                // Drop brains of bodies that no longer exist (slots reused by new ids).
+                if (brains.size > world.bodies.length) {
+                  for (const id of Array.from(brains.keys())) {
+                    if (!world.bodies.some((b) => b.id === id)) brains.delete(id)
+                  }
+                }
+              }
+            } else if (ev.type === "death" && ev.bodyId === "player" && world.mode === "endless") {
+              propsRef.current.onDeath?.(deathText(world, ev.cause))
+              forceHud = true
+            }
             if (ev.type === "phase") forceHud = true
             else if (ev.type === "absorb" && (ev.eaterId === "player" || ev.victimId === "player")) {
               hitStop = CONFIG.feel.hitStop
@@ -231,7 +305,7 @@ export function GameView(props: GameViewProps) {
         if (overAt < 0) overAt = now
         if (demo && now - overAt >= AFTERMATH_MS) {
           const sd = (Date.now() + Math.floor(Math.random() * 1000003)) % 2147483647
-          world = createWorld({ seed: sd, difficulty })
+          world = createWorld({ seed: sd, difficulty, arena: pickArena() })
           setupBrains(sd)
           renderer.reset(world)
           acc = 0
@@ -240,8 +314,18 @@ export function GameView(props: GameViewProps) {
         } else if (!demo && now - overAt >= AFTERMATH_MS && world.result) {
           ended = true
           ctl?.clear()
+          ctl?.setEnabled(false)
           pushHud(now)
-          propsRef.current.onEnd(world.result, world.bodies[0].stats)
+          const prof = propsRef.current.profile
+          if (prof) {
+            const got = finishRound(prof, tracker, world, world.result, Date.now())
+            if (got.length > 0) {
+              roundUnlocked.push(...got)
+              propsRef.current.sfx.ui("achievement")
+            }
+            saveProfile(store(), prof)
+          }
+          propsRef.current.onEnd(world.result, world.bodies[0].stats, roundUnlocked)
           running = false
           cancelAnimationFrame(raf)
         }
@@ -261,9 +345,12 @@ export function GameView(props: GameViewProps) {
         running = false
         cancelAnimationFrame(raf)
         ctl?.clear()
+        ctl?.setEnabled(false)
         renderer.render(world, Math.min(1, Math.max(0, acc / CONFIG.dt)), 0)
         if (!demo) propsRef.current.sfx.suspend()
       } else {
+        ctl?.clear()
+        ctl?.setEnabled(true)
         if (!demo) propsRef.current.sfx.resume()
         start()
       }
@@ -286,12 +373,33 @@ export function GameView(props: GameViewProps) {
 
     if (!demo) propsRef.current.onHud(hudSnapshot(world))
     if (pausedRef.current) {
+      ctl?.setEnabled(false)
       renderer.render(world, 0, 0)
     } else {
       start()
     }
 
+    // Endless has no round end: fold the session into the lifetime stats whenever it may be
+    // abandoned (tab hidden, page hidden, quit/restart/unmount). Each fold adds only what changed
+    // since the previous one, so repeated folds never double-count and nothing needs re-arming
+    // after a bfcache restore.
+    let foldSnap: EndlessFold | undefined
+    const foldSession = () => {
+      const prof = propsRef.current.profile
+      if (demo || !prof || world.mode !== "endless") return
+      foldSnap = finishEndlessSession(prof, world, tracker, foldSnap)
+      saveProfile(store(), prof)
+    }
+    window.addEventListener("pagehide", foldSession)
+    const onHiddenFold = () => {
+      if (document.visibilityState === "hidden") foldSession()
+    }
+    document.addEventListener("visibilitychange", onHiddenFold)
+
     return () => {
+      foldSession()
+      window.removeEventListener("pagehide", foldSession)
+      document.removeEventListener("visibilitychange", onHiddenFold)
       running = false
       cancelAnimationFrame(raf)
       setPausedRef.current = null
@@ -304,7 +412,11 @@ export function GameView(props: GameViewProps) {
       setInput(null)
       if (debug && window.__gw === debug) delete window.__gw
     }
-  }, [seed, difficulty, sfx, demo])
+  }, [seed, difficulty, arena, mode, sfx, demo])
+
+  useEffect(() => {
+    propsRef.current.onInputReady?.(input)
+  }, [input])
 
   useEffect(() => {
     setPausedRef.current?.(paused)
@@ -313,7 +425,7 @@ export function GameView(props: GameViewProps) {
   return (
     <div ref={stageRef} className="gw-stage">
       <canvas ref={canvasRef} className="gw-canvas" role="img" aria-label="Gravity Wars arena" />
-      {!demo && !props.hideTouch && layout === "touch" && input && <TouchControls input={input} onGesture={props.onGesture} />}
+      {!demo && !props.hideTouch && layout === "touch" && input && <TouchControls input={input} hud={props.hud ?? null} onGesture={props.onGesture} />}
     </div>
   )
 }

@@ -5,7 +5,7 @@
 
 import { CONFIG } from "./config"
 import { canAbsorb, pullRadius } from "./engine"
-import type { Body, GameEvent, Vec, World } from "./types"
+import type { Body, CosmicKind, GameEvent, PowerUpKind, Vec, World } from "./types"
 
 export interface RenderView {
   /** Canvas size in CSS pixels. */
@@ -69,6 +69,40 @@ const FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif"
 const P_DOT = 0
 const P_RING = 1
 const P_FLASH = 2
+/** Straight streak from (x, y) along the stored vector (vx, vy); does not move. */
+const P_LINE = 3
+const DASH_T = 0.18
+/** Ring that collapses to its centre (warp-in / warp-out). */
+const P_RINGIN = 4
+
+const PICK_COL: Record<PowerUpKind, string> = { overdrive: "#ffb84d", magnet: "#5ef2ff", phase: "#9d7bff", bulk: "#7bed9f" }
+const COSMIC_RGB: Record<CosmicKind, string> = {
+  meteorShower: "255,184,77",
+  solarFlare: "255,77,109",
+  gravityStorm: "157,123,255",
+  wormholeStorm: "157,123,255",
+  nebulaDrift: "199,125,255",
+  quantumAnomaly: "123,237,159",
+}
+
+const RND = new Float32Array(32)
+{
+  let seed = 0x2545f491
+  for (let i = 0; i < RND.length; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+    RND[i] = seed / 4294967296
+  }
+}
+
+const MINI_WELL: Record<string, string> = {
+  star: "#ffb84d",
+  blackhole: "#ff4d8d",
+  whitedwarf: "#cfeaff",
+  neutronstar: "#9ff1ff",
+  pulsar: "#c9a8ff",
+  planet: "#b6c28a",
+  station: "#5ef2ff",
+}
 
 function makeCanvas(w: number, h: number): HTMLCanvasElement {
   const c = document.createElement("canvas")
@@ -142,12 +176,18 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   let flashT = 0
   let vigI = 0
   let vigAmber = false
+  let curAlpha = 1
+  let evFlashT = 0
+  let evFlashRgb = "255,255,255"
+  let WX = 0
+  let WY = 0
+  const whPrev = new Float64Array(4)
+  let whInit = false
 
   // ---- sprite caches ----------------------------------------------------------------------
   const glowCache = new Map<string, HTMLCanvasElement>()
   const discCache = new Map<string, HTMLCanvasElement>()
   let ringSprite: HTMLCanvasElement | null = null
-  let vignetteSprite: HTMLCanvasElement | null = null
 
   function glow(color: string): HTMLCanvasElement {
     let s = glowCache.get(color)
@@ -221,10 +261,12 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     return ringSprite
   }
 
-  let vignetteAmber: HTMLCanvasElement | null = null
-  function getVignette(amber: boolean): HTMLCanvasElement {
-    const make = (rgb: string) => {
-      const c = makeCanvas(256, 256)
+  const vignetteCache = new Map<string, HTMLCanvasElement>()
+  /** Edge vignette sprite for an "r,g,b" colour string (transparent centre, solid rim). */
+  function getVignette(rgb: string): HTMLCanvasElement {
+    let c = vignetteCache.get(rgb)
+    if (!c) {
+      c = makeCanvas(256, 256)
       const sg = c.getContext("2d")
       if (sg) {
         const gd = sg.createRadialGradient(128, 128, 0, 128, 128, 128)
@@ -234,10 +276,131 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
         sg.fillStyle = gd
         sg.fillRect(0, 0, 256, 256)
       }
-      return c
+      vignetteCache.set(rgb, c)
     }
-    if (amber) return vignetteAmber || (vignetteAmber = make("255,184,77"))
-    return vignetteSprite || (vignetteSprite = make("255,40,70"))
+    return c
+  }
+  const VIG_RED = "255,40,70"
+  const VIG_AMBER = "255,184,77"
+  const VIG_VIOLET = "157,123,255"
+
+  /** Triangle sprite: apex at the left-middle (wide = false) or wide at the left, apex right. */
+  function makeTri(wideLeft: boolean, c0: string, c1: string): HTMLCanvasElement {
+    const c = makeCanvas(256, 64)
+    const sg = c.getContext("2d")
+    if (sg) {
+      const gd = sg.createLinearGradient(0, 0, 256, 0)
+      gd.addColorStop(0, c0)
+      gd.addColorStop(1, c1)
+      sg.fillStyle = gd
+      sg.beginPath()
+      if (wideLeft) {
+        sg.moveTo(0, 0)
+        sg.lineTo(0, 64)
+        sg.lineTo(256, 32)
+      } else {
+        sg.moveTo(0, 32)
+        sg.lineTo(256, 0)
+        sg.lineTo(256, 64)
+      }
+      sg.closePath()
+      sg.fill()
+    }
+    return c
+  }
+  let beamSprite: HTMLCanvasElement | null = null
+  let beamCore: HTMLCanvasElement | null = null
+  let tailSprite: HTMLCanvasElement | null = null
+  function getBeam(): HTMLCanvasElement {
+    return beamSprite || (beamSprite = makeTri(false, "rgba(205,170,255,0.6)", "rgba(160,110,255,0)"))
+  }
+  function getBeamCore(): HTMLCanvasElement {
+    return beamCore || (beamCore = makeTri(false, "rgba(255,255,255,0.9)", "rgba(230,215,255,0)"))
+  }
+  function getTail(): HTMLCanvasElement {
+    return tailSprite || (tailSprite = makeTri(true, "rgba(191,233,255,0.85)", "rgba(120,190,255,0)"))
+  }
+
+  const fogSprites: HTMLCanvasElement[] = []
+  function getFog(k: number): HTMLCanvasElement {
+    let c = fogSprites[k]
+    if (!c) {
+      c = makeCanvas(256, 256)
+      const sg = c.getContext("2d")
+      if (sg) {
+        let s = 0x9e3779b1 + k * 104729
+        const next = () => {
+          s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+          return s / 4294967296
+        }
+        for (let i = 0; i < 9; i++) {
+          const a = next() * TAU
+          const d = next() * 70
+          const x = 128 + Math.cos(a) * d
+          const y = 128 + Math.sin(a) * d
+          const r = 50 + next() * 50
+          const col = next() < 0.5 ? "120,70,210" : "40,150,170"
+          const gd = sg.createRadialGradient(x, y, 0, x, y, r)
+          gd.addColorStop(0, `rgba(${col},0.5)`)
+          gd.addColorStop(1, `rgba(${col},0)`)
+          sg.fillStyle = gd
+          sg.fillRect(0, 0, 256, 256)
+        }
+      }
+      fogSprites[k] = c
+    }
+    return c
+  }
+
+  const planetSprites: HTMLCanvasElement[] = []
+  /** Solid planet: lit sphere, a few surface patches, terminator shading and an atmosphere rim. */
+  function getPlanet(pal: number): HTMLCanvasElement {
+    let c = planetSprites[pal]
+    if (!c) {
+      const S = 192
+      c = makeCanvas(S, S)
+      const sg = c.getContext("2d")
+      if (sg) {
+        const earth = pal === 0
+        sg.save()
+        sg.beginPath()
+        sg.arc(S / 2, S / 2, S / 2 - 1, 0, TAU)
+        sg.clip()
+        const base = sg.createRadialGradient(S * 0.36, S * 0.34, 0, S / 2, S / 2, S / 2)
+        base.addColorStop(0, earth ? "#e6c590" : "#f2fdff")
+        base.addColorStop(1, earth ? "#8a5a3a" : "#5f9fc4")
+        sg.fillStyle = base
+        sg.fillRect(0, 0, S, S)
+        let s = 0x1b873593 + pal * 977
+        const next = () => {
+          s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+          return s / 4294967296
+        }
+        for (let i = 0; i < 7; i++) {
+          sg.globalAlpha = 0.22
+          sg.fillStyle = earth ? "#5a3a24" : "#9fd6ee"
+          sg.beginPath()
+          sg.ellipse(next() * S, next() * S, 14 + next() * 30, 6 + next() * 14, next() * 3, 0, TAU)
+          sg.fill()
+        }
+        sg.globalAlpha = 1
+        const term = sg.createRadialGradient(S * 0.3, S * 0.28, 0, S * 0.3, S * 0.28, S * 1.05)
+        term.addColorStop(0, "rgba(0,0,12,0)")
+        term.addColorStop(0.5, "rgba(0,0,12,0)")
+        term.addColorStop(1, "rgba(0,0,12,0.82)")
+        sg.fillStyle = term
+        sg.fillRect(0, 0, S, S)
+        const rim = sg.createRadialGradient(S / 2, S / 2, S * 0.4, S / 2, S / 2, S / 2)
+        rim.addColorStop(0, "rgba(255,255,255,0)")
+        rim.addColorStop(0.82, "rgba(255,255,255,0)")
+        rim.addColorStop(1, earth ? "rgba(255,215,160,0.6)" : "rgba(150,235,255,0.65)")
+        sg.fillStyle = rim
+        sg.fillRect(0, 0, S, S)
+        sg.restore()
+      }
+      planetSprites[pal] = c
+    }
+    return c
   }
 
   // ---- star background --------------------------------------------------------------------
@@ -311,6 +474,12 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   let popV: number[] = []
   let emitThrust: number[] = []
   let emitSpark: number[] = []
+  const dashT: number[] = []
+  const dashDx: number[] = []
+  const dashDy: number[] = []
+  const slingT: number[] = []
+  const emitPow: number[] = []
+  const emitSling: number[] = []
   let bx = new Float64Array(16)
   let by = new Float64Array(16)
 
@@ -320,6 +489,12 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       popV.push(0)
       emitThrust.push(0)
       emitSpark.push(0)
+      dashT.push(0)
+      dashDx.push(1)
+      dashDy.push(0)
+      slingT.push(0)
+      emitPow.push(0)
+      emitSling.push(0)
     }
     if (bx.length < n) {
       bx = new Float64Array(n * 2)
@@ -485,7 +660,13 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       popV[i] = 0
       emitThrust[i] = 0
       emitSpark[i] = 0
+      dashT[i] = 0
+      slingT[i] = 0
+      emitPow[i] = 0
+      emitSling[i] = 0
     }
+    evFlashT = 0
+    whInit = false
     placeNebulae(world.seed)
   }
 
@@ -511,14 +692,14 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
         case "eat": {
           const bi = bodyIndex(world, ev.bodyId)
           if (bi >= 0) {
-            const amt = ev.kind === "crystal" ? 0.1 : 0.06
+            const amt = ev.kind === "comet" ? 0.16 : ev.kind === "crystal" ? 0.1 : 0.06
             popX[bi] += amt * 0.5
             popV[bi] += amt * 8
           }
           if (visible(ev.x, ev.y, 100)) {
-            const col = ev.kind === "dust" ? C_DUST : ev.kind === "rock" ? C_ROCK : C_PLAYER
-            const cnt = 4 + ((Math.random() * 5) | 0)
-            burst(ev.x, ev.y, cnt, 30, 95, 0.4, ev.kind === "crystal" ? 2.4 : 1.8, col, false)
+            const col = ev.kind === "dust" ? C_DUST : ev.kind === "rock" ? C_ROCK : ev.kind === "comet" ? "#bfe9ff" : C_PLAYER
+            const cnt = ev.kind === "comet" ? 12 : 4 + ((Math.random() * 5) | 0)
+            burst(ev.x, ev.y, cnt, 30, ev.kind === "comet" ? 180 : 95, 0.4, ev.kind === "crystal" || ev.kind === "comet" ? 2.6 : 1.8, col, false)
           }
           if (ev.bodyId === "player" && player) {
             if (gainIdx >= 0 && tLife[gainIdx] > 0 && tGain[gainIdx] === 1 && clock - gainAt < 0.15) {
@@ -587,6 +768,161 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           if (ev.bodyId === "player" && player) spawnText("LOW ENERGY", player.x, player.y - player.radius - 20, C_AMBER, 16, false)
           break
         }
+        case "dash": {
+          const bi = bodyIndex(world, ev.bodyId)
+          const len = Math.hypot(ev.dx, ev.dy) || 1
+          const ux = ev.dx / len
+          const uy = ev.dy / len
+          const col = bi >= 0 ? world.bodies[bi].color : "#ffffff"
+          if (bi >= 0) {
+            dashT[bi] = DASH_T
+            dashDx[bi] = ux
+            dashDy[bi] = uy
+          }
+          if (visible(ev.x, ev.y, 200)) {
+            addP(P_LINE, ev.x, ev.y, -ux * 130, -uy * 130, 0.25, 4 / zoom, "#ffffff", true)
+            addP(P_LINE, ev.x, ev.y, -ux * 90, -uy * 90, 0.32, 9 / zoom, col, true)
+            const cnt = reduced ? 5 : 10
+            for (let i = 0; i < cnt; i++) {
+              const sv = 120 + Math.random() * 200
+              const j = (Math.random() - 0.5) * 0.9
+              addP(P_DOT, ev.x, ev.y, -ux * sv - uy * sv * j, -uy * sv + ux * sv * j, 0.35 + Math.random() * 0.2, 3 / zoom, col, true)
+            }
+          }
+          break
+        }
+        case "repulse": {
+          const bi = bodyIndex(world, ev.bodyId)
+          const col = bi >= 0 ? world.bodies[bi].color : "#ffffff"
+          if (bi >= 0) {
+            popX[bi] += 0.12
+            popV[bi] += 2
+          }
+          addP(P_RING, ev.x, ev.y, 0, 0, 0.35, ev.r, col, true)
+          addP(P_RING, ev.x, ev.y, 0, 0, 0.3, ev.r * 0.65, "#ffffff", true)
+          burst(ev.x, ev.y, 22, 250, 650, 0.5, 2.4, col, true)
+          if (ev.bodyId === "player") trauma = Math.min(1, trauma + 0.2)
+          break
+        }
+        case "ultStart": {
+          const bi = bodyIndex(world, ev.bodyId)
+          const col = bi >= 0 ? world.bodies[bi].color : "#ffffff"
+          const R0 = 170
+          const cnt = reduced ? 20 : 40
+          for (let i = 0; i < cnt; i++) {
+            const a = Math.random() * TAU
+            const ca = Math.cos(a)
+            const sa = Math.sin(a)
+            const rr = R0 * (0.6 + Math.random() * 0.6)
+            addP(P_DOT, ev.x + ca * rr, ev.y + sa * rr, (-ca * rr) / 0.45, (-sa * rr) / 0.45, 0.45, 3 / zoom, col, true)
+          }
+          flashAt(ev.x, ev.y, 280, col)
+          if (ev.bodyId === "player") {
+            trauma = Math.min(1, trauma + 0.4)
+            flashT = Math.max(flashT, 0.08)
+          }
+          break
+        }
+        case "ultEnd": {
+          const bi = bodyIndex(world, ev.bodyId)
+          if (bi >= 0) {
+            const b = world.bodies[bi]
+            burst(b.x, b.y, 60, 100, 520, 0.8, 3, b.color, true)
+            shockwave(b.x, b.y, 340, b.color)
+            popX[bi] += 0.15
+          }
+          break
+        }
+        case "ultReady": {
+          if (ev.bodyId === "player" && player) spawnText("SINGULARITY READY", player.x, player.y - player.radius - 34, "#d9b8ff", 16, false)
+          break
+        }
+        case "slingshot": {
+          const bi = bodyIndex(world, ev.bodyId)
+          if (bi >= 0) slingT[bi] = 0.6
+          if (ev.bodyId === "player") spawnText("SLINGSHOT " + Math.round(ev.speed), ev.x, ev.y - 30, "#e8f6ff", 16, false)
+          break
+        }
+        case "pickup": {
+          const col = PICK_COL[ev.kind]
+          burst(ev.x, ev.y, 14, 60, 220, 0.5, 2.6, col, true)
+          shockwave(ev.x, ev.y, 46, col)
+          const bi = bodyIndex(world, ev.bodyId)
+          if (bi >= 0 && ev.kind === "bulk") {
+            popX[bi] += 0.1
+            popV[bi] += 3
+          }
+          if (ev.bodyId === "player" && player) {
+            const txt = ev.kind === "bulk" ? "+" + CONFIG.powerups.bulk.mass + " MASS" : ev.kind.toUpperCase()
+            spawnText(txt, player.x, player.y - player.radius - 26, col, 16, false)
+          }
+          break
+        }
+        case "assist": {
+          if (ev.bodyId === "player" && player) spawnText("ASSIST", player.x, player.y - player.radius - 40, "#ffd36b", 18, false)
+          break
+        }
+        case "solidHit": {
+          burst(ev.x, ev.y, 6, 20, 80, 0.5, 3, "#c9b79c", false)
+          break
+        }
+        case "cosmic": {
+          if (ev.stage !== "end") {
+            evFlashT = 0.35
+            evFlashRgb = COSMIC_RGB[ev.kind]
+          }
+          break
+        }
+        case "join": {
+          const bi = bodyIndex(world, ev.bodyId)
+          const col = bi >= 0 ? world.bodies[bi].color : "#ffffff"
+          if (!visible(ev.x, ev.y, 120)) break
+          addP(P_RINGIN, ev.x, ev.y, 0, 0, 0.45, 110, col, true)
+          burst(ev.x, ev.y, 26, 60, 280, 0.6, 3, col, true)
+          flashAt(ev.x, ev.y, 120, col)
+          if (!demo) spawnText(ev.name + " joined", ev.x, ev.y - (bi >= 0 ? world.bodies[bi].radius : 12) - 14, col, 13, false)
+          break
+        }
+        case "leave": {
+          const bi = bodyIndex(world, ev.bodyId)
+          const col = bi >= 0 ? world.bodies[bi].color : "#ffffff"
+          if (!visible(ev.x, ev.y, 120)) break
+          addP(P_RINGIN, ev.x, ev.y, 0, 0, 0.4, 70, col, true)
+          const R0 = 60
+          const cnt = reduced ? 10 : 22
+          for (let i = 0; i < cnt; i++) {
+            const a = Math.random() * TAU
+            const ca = Math.cos(a)
+            const sa = Math.sin(a)
+            const rr = R0 * (0.5 + Math.random() * 0.6)
+            addP(P_DOT, ev.x + ca * rr, ev.y + sa * rr, (-ca * rr) / 0.4, (-sa * rr) / 0.4, 0.4, 3 / zoom, col, true)
+          }
+          break
+        }
+        case "respawn": {
+          const bi = bodyIndex(world, ev.bodyId)
+          const col = bi >= 0 ? world.bodies[bi].color : C_PLAYER
+          if (bi >= 0) {
+            popX[bi] += 0.3
+            popV[bi] += 4
+          }
+          burst(ev.x, ev.y, 40, 80, 420, 0.7, 3, col, true)
+          flashAt(ev.x, ev.y, 240, "#ffffff")
+          addP(P_RING, ev.x, ev.y, 0, 0, 0.45, 220, col, true)
+          if (ev.bodyId === "player") {
+            // the player teleported: snap the camera instead of gliding across the arena
+            camX = ev.x
+            camY = ev.y
+            flashT = Math.max(flashT, 0.08)
+          }
+          break
+        }
+        case "escalation": {
+          evFlashT = 0.35
+          evFlashRgb = "255,77,109"
+          trauma = Math.min(1, trauma + 0.1)
+          break
+        }
         default:
           break
       }
@@ -625,6 +961,30 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
 
   function drawArena(world: World, player: Body | undefined, ppx: number, ppy: number) {
     const R = world.arenaRadius
+    const esc = R < world.arenaBase - 0.5
+    const sev = esc ? clamp((world.arenaBase - R) / (world.arenaBase * (1 - CONFIG.escalation.shrinkTo)), 0, 1) : 0
+    if (esc) {
+      // faint ghost of the original wall, and a red band hugging the closing one
+      g.globalAlpha = 0.14
+      g.strokeStyle = "#5ef2ff"
+      g.lineWidth = 1.5 / zoom
+      setDash(18, 14)
+      g.beginPath()
+      g.arc(0, 0, world.arenaBase, 0, TAU)
+      g.stroke()
+      g.setLineDash(NO_DASH)
+      g.strokeStyle = C_THREAT
+      const pulse = 0.75 + 0.25 * Math.sin(clock * 3)
+      for (let i = 0; i < 2; i++) {
+        const wd = i === 0 ? 70 : 150
+        g.globalAlpha = (0.06 + 0.1 * sev) * pulse
+        g.lineWidth = wd
+        g.beginPath()
+        g.arc(0, 0, R - wd / 2, 0, TAU)
+        g.stroke()
+      }
+      g.globalAlpha = 1
+    }
     if (player && player.alive) {
       const edge = R - Math.hypot(ppx, ppy)
       if (edge < 300) {
@@ -641,6 +1001,21 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
         g.globalAlpha = 1
       }
     }
+    if (esc) {
+      g.strokeStyle = C_THREAT
+      g.globalAlpha = 0.18 + 0.12 * sev
+      g.lineWidth = (8 + 8 * sev) / zoom
+      g.beginPath()
+      g.arc(0, 0, R, 0, TAU)
+      g.stroke()
+      g.globalAlpha = 0.55 + 0.35 * sev
+      g.lineWidth = (3 + 3 * sev) / zoom
+      g.beginPath()
+      g.arc(0, 0, R, 0, TAU)
+      g.stroke()
+      g.globalAlpha = 1
+      return
+    }
     g.strokeStyle = "rgba(94,242,255,0.25)"
     g.lineWidth = 2 / zoom
     g.beginPath()
@@ -648,89 +1023,521 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     g.stroke()
   }
 
+  /** Interpolated centre of a (possibly moving) well, into WX / WY. */
+  function wellPos(w: { x: number; y: number; vx: number; vy: number }) {
+    const back = CONFIG.dt * (1 - curAlpha)
+    WX = w.x - w.vx * back
+    WY = w.y - w.vy * back
+  }
+
+  function dashRing(x: number, y: number, r: number, color: string, alpha: number, a: number, b: number, speed: number) {
+    g.globalAlpha = alpha
+    g.strokeStyle = color
+    g.lineWidth = 1.6 / zoom
+    setDash(a, b)
+    g.lineDashOffset = -clock * speed
+    g.beginPath()
+    g.arc(x, y, r, 0, TAU)
+    g.stroke()
+    g.setLineDash(NO_DASH)
+    g.lineDashOffset = 0
+    g.globalAlpha = 1
+  }
+
+  function drawOrbits(world: World) {
+    const wells = world.wells
+    const reach = Math.hypot(W, H) / (2 * zoom)
+    g.strokeStyle = "rgba(190,215,255,0.16)"
+    g.lineWidth = 1.3 / zoom
+    setDash(10, 16)
+    for (let i = 0; i < wells.length; i++) {
+      const o = wells[i].orbit
+      if (!o) continue
+      if (Math.abs(Math.hypot(camX - o.cx, camY - o.cy) - o.r) > reach + 40) continue
+      g.beginPath()
+      g.arc(o.cx, o.cy, o.r, 0, TAU)
+      g.stroke()
+    }
+    g.setLineDash(NO_DASH)
+  }
+
   function drawWells(world: World, player: Body | undefined) {
     const wells = world.wells
+    const cosmic = world.cosmic
+    const storm = !!cosmic && cosmic.kind === "gravityStorm"
+    const gs = storm ? 1.5 : 1
+    const simT = world.time - CONFIG.dt * (1 - curAlpha)
+    const charging = !!player && player.alive && player.charging
     for (let i = 0; i < wells.length; i++) {
       const w = wells[i]
       const r = w.radius
-      if (w.kind === "star") {
-        const outer = Math.max(r * 4, w.chargeRadius)
-        if (!visible(w.x, w.y, outer)) continue
-        // glow
-        g.globalCompositeOperation = "lighter"
-        g.globalAlpha = 0.85
-        g.drawImage(glow("#ffb347"), w.x - r * 4, w.y - r * 4, r * 8, r * 8)
-        // corona: 8 wobbling spikes, slowly rotating
-        g.globalAlpha = 0.4
-        g.fillStyle = "#ffc86b"
-        g.beginPath()
-        const rot = clock * 0.18
-        for (let k = 0; k < 8; k++) {
-          const a = rot + (k * TAU) / 8
-          const len = r * (1.5 + 0.35 * Math.sin(clock * 1.7 + k * 1.3))
-          const hw = 0.2
-          g.moveTo(w.x + Math.cos(a - hw) * r * 0.9, w.y + Math.sin(a - hw) * r * 0.9)
-          g.lineTo(w.x + Math.cos(a) * len, w.y + Math.sin(a) * len)
-          g.lineTo(w.x + Math.cos(a + hw) * r * 0.9, w.y + Math.sin(a + hw) * r * 0.9)
+      wellPos(w)
+      const x = WX
+      const y = WY
+      switch (w.kind) {
+        case "star": {
+          const fl = cosmic && cosmic.kind === "solarFlare" && cosmic.targetId === w.id ? cosmic : null
+          const hot = !!fl && fl.stage === "active"
+          const wp = fl && fl.stage === "warning" ? clamp(fl.t / Math.max(0.01, fl.warning), 0, 1) : 0
+          const grow = 1 + 0.9 * wp
+          const lethalR = hot ? r * CONFIG.cosmic.solarFlare.radiusMul : r
+          const outer = Math.max(r * 4 * gs * grow, w.chargeRadius, hot ? lethalR * 1.6 : 0)
+          if (!visible(x, y, outer)) break
+          g.globalCompositeOperation = "lighter"
+          g.globalAlpha = 0.85
+          const gl = r * 4 * gs * grow
+          g.drawImage(glow("#ffb347"), x - gl, y - gl, gl * 2, gl * 2)
+          if (hot) {
+            g.globalAlpha = 0.8
+            const hg = lethalR * 1.5
+            g.drawImage(glow("#fff3c4"), x - hg, y - hg, hg * 2, hg * 2)
+          }
+          // corona: 8 wobbling spikes, slowly rotating
+          g.globalAlpha = hot ? 0.55 : 0.4
+          g.fillStyle = hot ? "#fff6d6" : "#ffc86b"
+          g.beginPath()
+          const rot = clock * (hot ? 0.5 : 0.18)
+          for (let k = 0; k < 8; k++) {
+            const a = rot + (k * TAU) / 8
+            const wob = 1.5 + 0.35 * Math.sin(clock * (hot ? 4 : 1.7) + k * 1.3)
+            const len = hot ? lethalR * (0.8 + 0.2 * Math.sin(clock * 5 + k * 1.3)) : r * wob * grow
+            const hw = hot ? 0.28 : 0.2
+            g.moveTo(x + Math.cos(a - hw) * r * 0.9, y + Math.sin(a - hw) * r * 0.9)
+            g.lineTo(x + Math.cos(a) * len, y + Math.sin(a) * len)
+            g.lineTo(x + Math.cos(a + hw) * r * 0.9, y + Math.sin(a + hw) * r * 0.9)
+          }
+          g.fill()
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          g.drawImage(hot ? disc("#ffffff", "#fff3c4") : disc("#fff3c4", "#ffb347"), x - r * DISC_PAD, y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
+          if (hot) {
+            g.strokeStyle = "rgba(255,150,100,0.85)"
+            g.lineWidth = 3 / zoom
+            g.beginPath()
+            g.arc(x, y, lethalR, 0, TAU)
+            g.stroke()
+          } else if (fl) {
+            // warning: red dashed ring at the coming flare radius, pulsing faster as it nears
+            const ph = 0.5 + 0.5 * Math.sin(clock * TAU * (2 + 8 * wp))
+            dashRing(x, y, r * CONFIG.cosmic.solarFlare.radiusMul, C_THREAT, 0.3 + 0.5 * ph, 16, 12, 20)
+          }
+          if (w.chargeRadius > 0) dashRing(x, y, w.chargeRadius, C_AMBER, charging ? 0.4 : 0.18, 18, 14, 8)
+          break
         }
-        g.fill()
+        case "blackhole": {
+          if (!visible(x, y, r * 4.5 * gs)) break
+          g.globalCompositeOperation = "lighter"
+          g.globalAlpha = 0.45
+          const gl = r * 4.5 * gs
+          g.drawImage(glow("#7a3cff"), x - gl, y - gl, gl * 2, gl * 2)
+          g.globalAlpha = 0.9
+          const ro = r * 3
+          g.drawImage(getRingSprite(), x - ro, y - ro, ro * 2, ro * 2)
+          g.lineCap = "round"
+          for (let k = 0; k < 3; k++) {
+            const rad = r * (1.55 + 0.55 * k)
+            const rot = clock * (1.9 - 0.45 * k) * (k % 2 === 0 ? 1 : -1)
+            g.strokeStyle = k % 2 === 0 ? "#c77dff" : "#ff4d8d"
+            g.lineWidth = r * (0.24 - 0.05 * k)
+            g.globalAlpha = 0.8
+            g.beginPath()
+            g.arc(x, y, rad, rot, rot + 2.4)
+            g.stroke()
+            g.globalAlpha = 0.45
+            g.beginPath()
+            g.arc(x, y, rad, rot + 3.3, rot + 4.9)
+            g.stroke()
+          }
+          g.lineCap = "butt"
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          g.fillStyle = "#000"
+          g.beginPath()
+          g.arc(x, y, r, 0, TAU)
+          g.fill()
+          g.strokeStyle = "rgba(255,232,255,0.85)"
+          g.lineWidth = 1.5 / zoom
+          g.beginPath()
+          g.arc(x, y, r * 1.12, 0, TAU)
+          g.stroke()
+          break
+        }
+        case "whitedwarf": {
+          if (!visible(x, y, Math.max(r * 6 * gs, w.chargeRadius))) break
+          g.globalCompositeOperation = "lighter"
+          g.globalAlpha = 0.9
+          const gl = r * 6 * gs
+          g.drawImage(glow("#8fd3ff"), x - gl, y - gl, gl * 2, gl * 2)
+          g.globalAlpha = 0.8
+          const g2 = r * 2.8
+          g.drawImage(glow("#ffffff"), x - g2, y - g2, g2 * 2, g2 * 2)
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          g.drawImage(disc("#dff6ff", "#8fd3ff"), x - r * DISC_PAD, y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
+          if (w.chargeRadius > 0) dashRing(x, y, w.chargeRadius, "#8fd3ff", charging ? 0.35 : 0.15, 14, 12, 10)
+          break
+        }
+        case "neutronstar": {
+          if (!visible(x, y, r * 12 * gs)) break
+          const pulse = 0.75 + 0.25 * Math.sin(clock * 9)
+          g.globalCompositeOperation = "lighter"
+          g.globalAlpha = 0.9
+          const gl = r * 10 * gs
+          g.drawImage(glow("#7fe7ff"), x - gl, y - gl, gl * 2, gl * 2)
+          g.globalAlpha = pulse
+          const g2 = r * 4.2
+          g.drawImage(glow("#ffffff"), x - g2, y - g2, g2 * 2, g2 * 2)
+          // magnetic field-line arcs, three opposite pairs
+          g.lineCap = "round"
+          g.strokeStyle = "#9ff1ff"
+          for (let k = 0; k < 3; k++) {
+            const rad = r * (2.4 + 1.1 * k)
+            const rot = clock * (2.4 - 0.5 * k) * (k % 2 === 0 ? 1 : -1) + k
+            g.lineWidth = 1.8 / zoom + 0.4
+            g.globalAlpha = 0.65 - 0.12 * k
+            g.beginPath()
+            g.arc(x, y, rad, rot, rot + 1.1)
+            g.stroke()
+            g.beginPath()
+            g.arc(x, y, rad, rot + Math.PI, rot + Math.PI + 1.1)
+            g.stroke()
+          }
+          g.lineCap = "butt"
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          g.drawImage(disc("#ffffff", "#bff6ff"), x - r * DISC_PAD, y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
+          break
+        }
+        case "pulsar": {
+          const beam = w.beam
+          const reach = beam ? beam.length : r * 6
+          if (!visible(x, y, reach)) break
+          g.globalCompositeOperation = "lighter"
+          if (beam) {
+            const th = beam.phase + beam.w * simT
+            const wid = Math.tan(beam.halfWidth)
+            const flick = 0.85 + 0.15 * Math.sin(clock * 11)
+            for (let k = 0; k < 2; k++) {
+              const ang = th + k * Math.PI
+              g.translate(x, y)
+              g.rotate(ang)
+              g.scale(reach, reach * wid)
+              g.globalAlpha = flick
+              g.drawImage(getBeam(), 0, -1, 1, 2)
+              g.scale(1, 0.28)
+              g.globalAlpha = flick
+              g.drawImage(getBeamCore(), 0, -1, 1, 2)
+              setWorld()
+            }
+            // danger rim along the beam edges
+            g.strokeStyle = "rgba(225,200,255,0.35)"
+            g.lineWidth = 1.5 / zoom
+            g.globalAlpha = 1
+            g.beginPath()
+            for (let k = 0; k < 2; k++) {
+              for (let e = -1; e <= 1; e += 2) {
+                const a = th + k * Math.PI + e * beam.halfWidth
+                g.moveTo(x + Math.cos(a) * r, y + Math.sin(a) * r)
+                g.lineTo(x + Math.cos(a) * reach, y + Math.sin(a) * reach)
+              }
+            }
+            g.stroke()
+          }
+          g.globalAlpha = 0.9
+          const gl = r * 6 * gs
+          g.drawImage(glow("#b48cff"), x - gl, y - gl, gl * 2, gl * 2)
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          g.drawImage(disc("#ffffff", "#b48cff"), x - r * DISC_PAD, y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
+          if (w.chargeRadius > 0) dashRing(x, y, w.chargeRadius, "#b48cff", charging ? 0.35 : 0.15, 14, 12, 10)
+          break
+        }
+        case "planet": {
+          if (!visible(x, y, r * 3)) break
+          let h = 0
+          for (let k = 0; k < w.id.length; k++) h += w.id.charCodeAt(k)
+          const pal = h % 2
+          g.globalCompositeOperation = "lighter"
+          g.globalAlpha = 0.25
+          const ag = r * 2.6
+          g.drawImage(glow(pal === 0 ? "#ffcf94" : "#8fe3ff"), x - ag, y - ag, ag * 2, ag * 2)
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          g.drawImage(getPlanet(pal), x - r * DISC_PAD, y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
+          break
+        }
+        case "station": {
+          if (!visible(x, y, Math.max(r * 2, w.chargeRadius))) break
+          const rot = clock * 0.35
+          g.fillStyle = "rgba(8,22,36,0.85)"
+          g.beginPath()
+          g.arc(x, y, r, 0, TAU)
+          g.fill()
+          g.strokeStyle = "#cfe8f5"
+          g.lineWidth = r * 0.16
+          g.beginPath()
+          g.arc(x, y, r * 0.92, 0, TAU)
+          g.stroke()
+          g.strokeStyle = "#5ef2ff"
+          g.lineWidth = r * 0.07
+          g.beginPath()
+          g.arc(x, y, r * 0.72, 0, TAU)
+          g.stroke()
+          g.strokeStyle = "#cfe8f5"
+          g.lineWidth = r * 0.1
+          g.beginPath()
+          for (let k = 0; k < 4; k++) {
+            const a = rot + (k * TAU) / 4
+            g.moveTo(x + Math.cos(a) * r * 0.25, y + Math.sin(a) * r * 0.25)
+            g.lineTo(x + Math.cos(a) * r * 0.9, y + Math.sin(a) * r * 0.9)
+          }
+          g.stroke()
+          g.fillStyle = "#e8fbff"
+          g.beginPath()
+          g.arc(x, y, r * 0.24, 0, TAU)
+          g.fill()
+          g.globalCompositeOperation = "lighter"
+          for (let k = 0; k < 4; k++) {
+            const a = rot + (k * TAU) / 4
+            g.globalAlpha = 0.5 + 0.5 * Math.sin(clock * 3 + k * 1.6)
+            const lg = r * 0.5
+            g.drawImage(glow("#5ef2ff"), x + Math.cos(a) * r * 0.92 - lg, y + Math.sin(a) * r * 0.92 - lg, lg * 2, lg * 2)
+          }
+          g.globalAlpha = 1
+          g.globalCompositeOperation = "source-over"
+          if (w.chargeRadius > 0) dashRing(x, y, w.chargeRadius, "#5ef2ff", charging ? 0.45 : 0.22, 16, 12, 12)
+          break
+        }
+        default:
+          break
+      }
+      // gravity storm: ripple rings radiating from every well
+      if (storm && visible(x, y, r * 9)) {
+        g.strokeStyle = C_WORM
+        g.lineWidth = 2 / zoom
+        for (let k = 0; k < 2; k++) {
+          const ph = (clock * 0.45 + k * 0.5 + i * 0.13) % 1
+          g.globalAlpha = (1 - ph) * 0.3
+          g.beginPath()
+          g.arc(x, y, r * 1.5 + ph * (r * 7 + 90), 0, TAU)
+          g.stroke()
+        }
+        g.globalAlpha = 1
+      }
+    }
+  }
+
+  function drawZones(world: World) {
+    const zs = world.zones
+    const back = CONFIG.dt * (1 - curAlpha)
+    for (let i = 0; i < zs.length; i++) {
+      const z = zs[i]
+      const x = z.x - z.vx * back
+      const y = z.y - z.vy * back
+      const r = z.r
+      if (!visible(x, y, r * 1.4)) continue
+      if (z.kind === "nebula") {
+        g.globalAlpha = 0.55
+        g.drawImage(glow("#3a2478"), x - r * 1.3, y - r * 1.3, r * 2.6, r * 2.6)
+        for (let k = 0; k < 3; k++) {
+          const sz = r * (1.5 + 0.15 * k)
+          g.translate(x + Math.cos(clock * 0.07 + k * 2.1) * r * 0.12, y + Math.sin(clock * 0.05 + k * 1.7) * r * 0.12)
+          g.rotate(clock * 0.03 * (k % 2 === 0 ? 1 : -1) + k * 2)
+          g.globalAlpha = 0.5
+          g.drawImage(getFog(k), -sz / 2, -sz / 2, sz, sz)
+          setWorld()
+        }
+        dashRing(x, y, r, "#b08cff", 0.25, 14, 12, 6)
+      } else if (z.kind === "repulsor") {
+        g.globalCompositeOperation = "lighter"
+        g.globalAlpha = 0.14
+        g.drawImage(glow(C_AMBER), x - r * 1.1, y - r * 1.1, r * 2.2, r * 2.2)
+        g.strokeStyle = C_AMBER
+        g.lineWidth = 2.6 / zoom
+        for (let k = 0; k < 4; k++) {
+          const ph = (clock * 0.55 + k / 4) % 1
+          g.globalAlpha = (1 - ph) * 0.55
+          g.beginPath()
+          g.arc(x, y, r * (0.1 + 0.9 * ph), 0, TAU)
+          g.stroke()
+        }
         g.globalAlpha = 1
         g.globalCompositeOperation = "source-over"
-        // disk
-        g.drawImage(disc("#fff3c4", "#ffb347"), w.x - r * DISC_PAD, w.y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
-        // dashed charge band
-        if (w.chargeRadius > 0) {
-          g.globalAlpha = player && player.alive && player.charging ? 0.4 : 0.18
-          g.strokeStyle = C_AMBER
-          g.lineWidth = 1.6 / zoom
-          setDash(18, 14)
-          g.lineDashOffset = -clock * 8
-          g.beginPath()
-          g.arc(w.x, w.y, w.chargeRadius, 0, TAU)
-          g.stroke()
-          g.setLineDash(NO_DASH)
-          g.lineDashOffset = 0
-          g.globalAlpha = 1
-        }
+        dashRing(x, y, r, C_AMBER, 0.3, 12, 10, -14)
       } else {
-        if (!visible(w.x, w.y, r * 4.5)) continue
         g.globalCompositeOperation = "lighter"
-        g.globalAlpha = 0.45
-        g.drawImage(glow("#7a3cff"), w.x - r * 4.5, w.y - r * 4.5, r * 9, r * 9)
-        g.globalAlpha = 0.9
-        const ro = r * 3
-        g.drawImage(getRingSprite(), w.x - ro, w.y - ro, ro * 2, ro * 2)
-        // rotating accretion arcs
+        g.globalAlpha = 0.3 + 0.1 * Math.sin(clock * 3)
+        g.drawImage(glow("#7bed9f"), x - r * 1.2, y - r * 1.2, r * 2.4, r * 2.4)
+        g.globalAlpha = 0.22
+        g.drawImage(glow("#9d7bff"), x - r * 0.9, y - r * 0.9, r * 1.8, r * 1.8)
         g.lineCap = "round"
-        for (let k = 0; k < 3; k++) {
-          const rad = r * (1.55 + 0.55 * k)
-          const rot = clock * (1.9 - 0.45 * k) * (k % 2 === 0 ? 1 : -1)
-          g.strokeStyle = k % 2 === 0 ? "#c77dff" : "#ff4d8d"
-          g.lineWidth = r * (0.24 - 0.05 * k)
-          g.globalAlpha = 0.8
+        g.lineWidth = 2.4 / zoom + 0.6
+        for (let k = 0; k < 4; k++) {
+          const dir = k % 2 === 0 ? 1 : -1
+          const a0 = clock * 1.1 * dir + (k * TAU) / 4
+          g.strokeStyle = k % 2 === 0 ? "#7bed9f" : "#9d7bff"
+          g.globalAlpha = 0.65
           g.beginPath()
-          g.arc(w.x, w.y, rad, rot, rot + 2.4)
-          g.stroke()
-          g.globalAlpha = 0.45
-          g.beginPath()
-          g.arc(w.x, w.y, rad, rot + 3.3, rot + 4.9)
+          for (let s = 0; s <= 12; s++) {
+            const t = s / 12
+            const a = a0 + dir * t * 3
+            const rad = r * (0.12 + 0.82 * t)
+            if (s === 0) g.moveTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad)
+            else g.lineTo(x + Math.cos(a) * rad, y + Math.sin(a) * rad)
+          }
           g.stroke()
         }
         g.lineCap = "butt"
+        g.fillStyle = "#e8fff0"
+        for (let k = 0; k < 9; k++) {
+          const a = clock * (0.8 + (k % 3) * 0.3) + k * 0.7
+          const rad = r * (0.25 + 0.65 * ((k * 0.37) % 1))
+          g.globalAlpha = 0.6 + 0.4 * Math.sin(clock * 4 + k)
+          const m = 2.5 / zoom + 1
+          g.fillRect(x + Math.cos(a) * rad - m / 2, y + Math.sin(a) * rad - m / 2, m, m)
+        }
         g.globalAlpha = 1
         g.globalCompositeOperation = "source-over"
-        // core + lensing ring
-        g.fillStyle = "#000"
-        g.beginPath()
-        g.arc(w.x, w.y, r, 0, TAU)
-        g.fill()
-        g.strokeStyle = "rgba(255,232,255,0.85)"
-        g.lineWidth = 1.5 / zoom
-        g.beginPath()
-        g.arc(w.x, w.y, r * 1.12, 0, TAU)
-        g.stroke()
+        dashRing(x, y, r, "#7bed9f", 0.3, 10, 10, 10)
       }
     }
+  }
+
+  function drawPickups(world: World) {
+    const ps = world.pickups
+    g.lineCap = "round"
+    g.lineJoin = "round"
+    for (let i = 0; i < ps.length; i++) {
+      const p = ps[i]
+      const R = Math.max(CONFIG.powerups.radius, 12 / zoom)
+      const x = p.x
+      const y = p.y + Math.sin(clock * 2.2 + p.id) * 3
+      if (!visible(x, y, R * 2.5)) continue
+      if (p.ttl < 3 && Math.sin(clock * 14) < 0) continue
+      const col = PICK_COL[p.kind]
+      const k = R / 13
+      g.globalCompositeOperation = "lighter"
+      g.globalAlpha = 0.7
+      g.drawImage(glow(col), x - R * 2.4, y - R * 2.4, R * 4.8, R * 4.8)
+      g.globalCompositeOperation = "source-over"
+      g.globalAlpha = 1
+      g.fillStyle = "rgba(2,3,10,0.7)"
+      g.beginPath()
+      g.arc(x, y, R, 0, TAU)
+      g.fill()
+      g.strokeStyle = col
+      g.lineWidth = 2 / zoom
+      g.beginPath()
+      g.arc(x, y, R, 0, TAU)
+      g.stroke()
+      g.fillStyle = col
+      g.strokeStyle = col
+      if (p.kind === "overdrive") {
+        g.beginPath()
+        g.moveTo(x + 2.5 * k, y - 10 * k)
+        g.lineTo(x - 5.5 * k, y + 1 * k)
+        g.lineTo(x - 0.5 * k, y + 1 * k)
+        g.lineTo(x - 2.5 * k, y + 10 * k)
+        g.lineTo(x + 5.5 * k, y - 2 * k)
+        g.lineTo(x + 0.5 * k, y - 2 * k)
+        g.closePath()
+        g.fill()
+      } else if (p.kind === "magnet") {
+        g.lineWidth = 3.4 * k
+        g.lineCap = "butt"
+        g.beginPath()
+        g.moveTo(x - 5.5 * k, y - 8 * k)
+        g.lineTo(x - 5.5 * k, y)
+        g.arc(x, y, 5.5 * k, Math.PI, 0, true)
+        g.lineTo(x + 5.5 * k, y - 8 * k)
+        g.stroke()
+        g.strokeStyle = "#ffffff"
+        g.beginPath()
+        g.moveTo(x - 5.5 * k, y - 8 * k)
+        g.lineTo(x - 5.5 * k, y - 4.5 * k)
+        g.moveTo(x + 5.5 * k, y - 8 * k)
+        g.lineTo(x + 5.5 * k, y - 4.5 * k)
+        g.stroke()
+        g.lineCap = "round"
+      } else if (p.kind === "phase") {
+        g.lineWidth = 2.6 * k
+        setDash(3.2 * k, 3.2 * k)
+        g.lineDashOffset = -clock * 6 * k
+        g.beginPath()
+        g.arc(x, y, 7.5 * k, 0, TAU)
+        g.stroke()
+        g.setLineDash(NO_DASH)
+        g.lineDashOffset = 0
+        g.beginPath()
+        g.arc(x, y, 2.2 * k, 0, TAU)
+        g.fill()
+      } else {
+        g.beginPath()
+        for (let s = 0; s < 6; s++) {
+          const a = Math.PI / 6 + (s * TAU) / 6
+          const px2 = x + Math.cos(a) * 8.5 * k
+          const py2 = y + Math.sin(a) * 8.5 * k
+          if (s === 0) g.moveTo(px2, py2)
+          else g.lineTo(px2, py2)
+        }
+        g.closePath()
+        g.fill()
+        g.fillStyle = "#d9ffe6"
+        g.beginPath()
+        for (let s = 0; s < 6; s++) {
+          const a = Math.PI / 6 + (s * TAU) / 6
+          const px2 = x + Math.cos(a) * 4.2 * k
+          const py2 = y + Math.sin(a) * 4.2 * k
+          if (s === 0) g.moveTo(px2, py2)
+          else g.lineTo(px2, py2)
+        }
+        g.closePath()
+        g.fill()
+      }
+    }
+    g.lineCap = "butt"
+    g.lineJoin = "miter"
+    g.globalAlpha = 1
+  }
+
+  function drawMeteors(world: World) {
+    const ev = world.cosmic
+    if (!ev || ev.kind !== "meteorShower") return
+    const r = ev.r
+    if (!visible(ev.x, ev.y, r * 1.2)) return
+    if (ev.stage === "warning") {
+      const p = 0.5 + 0.5 * Math.sin(clock * 8)
+      dashRing(ev.x, ev.y, r, C_AMBER, 0.3 + 0.45 * p, 18, 12, 30)
+      return
+    }
+    g.save()
+    g.beginPath()
+    g.arc(ev.x, ev.y, r, 0, TAU)
+    g.clip()
+    g.globalCompositeOperation = "lighter"
+    g.lineCap = "round"
+    g.strokeStyle = "#ffd9a0"
+    g.lineWidth = 2.4 / zoom + 0.6
+    g.beginPath()
+    for (let k = 0; k < 26; k++) {
+      const h1 = RND[k]
+      const h2 = RND[(k * 7 + 3) % RND.length]
+      const ph = (clock * (0.7 + 0.5 * h2) + h1 * 3.7) % 1
+      const sx = ev.x + (h1 - 0.5) * 2.4 * r - r * 0.5
+      const sy = ev.y - r * 1.1
+      const hx = sx + 0.5 * 2.3 * r * ph
+      const hy = sy + 2.3 * r * ph
+      g.moveTo(hx - 0.45 * 70, hy - 70)
+      g.lineTo(hx, hy)
+    }
+    g.stroke()
+    g.restore()
+    g.globalAlpha = 0.18
+    g.drawImage(glow(C_AMBER), ev.x - r, ev.y - r, r * 2, r * 2)
+    g.globalAlpha = 1
+    g.globalCompositeOperation = "source-over"
+    g.lineCap = "butt"
+    dashRing(ev.x, ev.y, r, C_AMBER, 0.35, 18, 12, 30)
   }
 
   function drawWormholes(world: World) {
@@ -742,13 +1549,14 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       const r = w.radius * 1.6
       if (!visible(w.x, w.y, r * 3.5)) continue
       const breathe = 0.5 + 0.5 * Math.sin(clock * 1.2 + i * 2)
-      g.globalAlpha = 1
+      const fl = world.cosmic && world.cosmic.kind === "wormholeStorm" ? 0.45 + 0.55 * Math.abs(Math.sin(clock * 31 + i * 5) * Math.sin(clock * 17)) : 1
+      g.globalAlpha = fl
       g.drawImage(glow(C_WORM), w.x - r * 3, w.y - r * 3, r * 6, r * 6)
-      g.globalAlpha = 0.6
+      g.globalAlpha = 0.6 * fl
       g.drawImage(glow("#c9b6ff"), w.x - r * 1.4, w.y - r * 1.4, r * 2.8, r * 2.8)
       g.strokeStyle = C_WORM
       g.lineWidth = 2.8 / zoom + 0.8
-      g.globalAlpha = 1
+      g.globalAlpha = fl
       for (let k = 0; k < 3; k++) {
         const dir = k % 2 === 0 ? 1 : -1
         const a0 = clock * 1.6 * dir + (k * TAU) / 3
@@ -843,39 +1651,77 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     }
     g.fill()
     g.stroke()
+    // comets: bright head, long fading tail opposite the velocity
+    for (let i = 0; i < ds.length; i++) {
+      const d = ds[i]
+      if (d.kind !== "comet") continue
+      const x = d.px + (d.x - d.px) * alpha
+      const y = d.py + (d.y - d.py) * alpha
+      const sp = Math.hypot(d.vx, d.vy)
+      const L = Math.max(sp * 0.25, 50)
+      if (Math.abs(x - camX) > hw + L || Math.abs(y - camY) > hh + L) continue
+      g.globalCompositeOperation = "lighter"
+      g.translate(x, y)
+      g.rotate(Math.atan2(-d.vy, -d.vx))
+      g.scale(L, d.radius * 1.1)
+      g.globalAlpha = 1
+      g.drawImage(getTail(), 0, -1, 1, 2)
+      setWorld()
+      g.globalAlpha = 0.9
+      const gr = d.radius * 3.4
+      g.drawImage(glow("#bfe9ff"), x - gr, y - gr, gr * 2, gr * 2)
+      g.globalAlpha = 1
+      g.globalCompositeOperation = "source-over"
+      const dr = d.radius * DISC_PAD
+      g.drawImage(disc("#ffffff", "#bfe9ff"), x - dr, y - dr, dr * 2, dr * 2)
+    }
   }
 
   function drawPulls(world: World) {
     const bs = world.bodies
     for (let i = 0; i < bs.length; i++) {
       const b = bs[i]
-      if (!b.alive || !b.pulling) continue
+      const ult = b.ultActive > 0
+      if (!b.alive || (!b.pulling && !ult)) continue
       const R = pullRadius(b)
       const x = bx[i]
       const y = by[i]
       if (!visible(x, y, R)) continue
+      // a hint, not a field: rivals at half strength, everything fading as the radius grows on screen
+      const f = i === 0 ? 1 : 0.5
+      const s = clamp(1 - (R * zoom - 250) / 350, 0, 1)
       g.fillStyle = b.color
-      g.globalAlpha = 0.06
-      g.beginPath()
-      g.arc(x, y, R, 0, TAU)
-      g.fill()
-      g.globalAlpha = 0.35
-      g.strokeStyle = b.color
-      g.lineWidth = 1.6 / zoom
-      // ring + 12 spokes drawn outer -> inner; a negative dash offset marches the dashes inward
-      setDash(10 / zoom + 4, 9 / zoom + 4)
-      g.lineDashOffset = -clock * 60
-      g.beginPath()
-      for (let k = 0; k < 12; k++) {
-        const a = (k * TAU) / 12 + clock * 0.2
-        const ca = Math.cos(a)
-        const sa = Math.sin(a)
-        g.moveTo(x + ca * R, y + sa * R)
-        g.lineTo(x + ca * (b.radius * 1.3), y + sa * (b.radius * 1.3))
+      g.globalAlpha = 0.03 * f * s
+      if (g.globalAlpha > 0) {
+        g.beginPath()
+        g.arc(x, y, R, 0, TAU)
+        g.fill()
       }
-      g.stroke()
+      g.strokeStyle = b.color
+      g.lineWidth = 1.5 / zoom
+      // 12 spokes drawn outer -> inner; a negative dash offset marches the dashes inward.
+      // Inner stretch is stronger than the outer one, so they fade toward the edge.
+      setDash(10 / zoom + 4, 9 / zoom + 4)
+      g.lineDashOffset = -clock * (ult ? 110 : 60)
+      const r0 = b.radius * 1.3
+      const mid = r0 + (R - r0) * 0.6
+      for (let pass = 0; pass < 2; pass++) {
+        g.globalAlpha = (pass === 0 ? 0.18 : 0.07) * f * (0.3 + 0.7 * s)
+        g.beginPath()
+        for (let k = 0; k < 12; k++) {
+          const a = (k * TAU) / 12 + clock * 0.2
+          const ca = Math.cos(a)
+          const sa = Math.sin(a)
+          const from = pass === 0 ? mid : R
+          const to = pass === 0 ? r0 : mid
+          g.moveTo(x + ca * from, y + sa * from)
+          g.lineTo(x + ca * to, y + sa * to)
+        }
+        g.stroke()
+      }
       g.lineDashOffset = 0
       g.setLineDash(NO_DASH)
+      g.globalAlpha = 0.3 * f * (0.4 + 0.6 * s)
       g.beginPath()
       g.arc(x, y, R, 0, TAU)
       g.stroke()
@@ -907,9 +1753,9 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           g.arc(x, y, s / 2, 0, TAU)
           g.fill()
         }
-      } else if (kind === P_RING) {
+      } else if (kind === P_RING || kind === P_RINGIN) {
         const p = 1 - life
-        const r = pSize[i] * (1 - (1 - p) * (1 - p) * (1 - p))
+        const r = kind === P_RING ? pSize[i] * (1 - (1 - p) * (1 - p) * (1 - p)) : pSize[i] * life
         if (!visible(x, y, r)) continue
         g.globalAlpha = life * 0.9
         g.strokeStyle = pCol[i]
@@ -917,6 +1763,18 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
         g.beginPath()
         g.arc(x, y, r, 0, TAU)
         g.stroke()
+        lastCol = ""
+      } else if (kind === P_LINE) {
+        if (!visible(x, y, 200)) continue
+        g.globalAlpha = life
+        g.strokeStyle = pCol[i]
+        g.lineWidth = pSize[i] * (0.3 + 0.7 * life)
+        g.lineCap = "round"
+        g.beginPath()
+        g.moveTo(x, y)
+        g.lineTo(x + pVX[i], y + pVY[i])
+        g.stroke()
+        g.lineCap = "butt"
         lastCol = ""
       } else {
         const p = 1 - life
@@ -940,17 +1798,69 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       const y = by[i]
       const scale = clamp(1 + popX[i], 0.6, 1.6)
       const r = b.radius * scale
-      if (!visible(x, y, r * 2.4)) continue
+      const ult = b.ultActive > 0
+      const magnet = b.power.magnet > 0
+      const mr = magnet ? pullRadius(b) : 0
+      if (!visible(x, y, Math.max(r * 2.4, mr))) continue
+      // phase: semi-transparent, blinking in its last second
+      const phased = b.power.phase > 0
+      let ba = 1
+      if (phased) ba = b.power.phase < 1 && ((clock * 10) | 0) % 2 === 0 ? 0.85 : 0.42
+      const stretched = dashT[i] > 0
+      let sx = 1
+      let sy = 1
+      let ang = 0
+      if (stretched) {
+        sx = 1 + 0.4 * (dashT[i] / DASH_T)
+        sy = 1 / Math.sqrt(sx)
+        ang = Math.atan2(dashDy[i], dashDx[i])
+      }
       // glow
       const gr = r * 2.2
       g.globalCompositeOperation = "lighter"
-      g.globalAlpha = 0.35
+      g.globalAlpha = 0.35 * (phased ? 0.6 : 1)
       g.drawImage(glow(b.color), x - gr, y - gr, gr * 2, gr * 2)
-      g.globalAlpha = 1
+      g.globalAlpha = ba
       g.globalCompositeOperation = "source-over"
-      // disk
+      // disk (squash and stretch along the dash direction)
       const d = r * DISC_PAD
-      g.drawImage(bodyDisc(b.color), x - d, y - d, d * 2, d * 2)
+      if (stretched) {
+        g.translate(x, y)
+        g.rotate(ang)
+        g.scale(sx, sy)
+        g.drawImage(bodyDisc(b.color), -d, -d, d * 2, d * 2)
+        setWorld()
+      } else {
+        g.drawImage(bodyDisc(b.color), x - d, y - d, d * 2, d * 2)
+      }
+      // Singularity: dark core, bright event-horizon rim, accretion swirl
+      if (ult) {
+        const ua = Math.min(1, b.ultActive / 0.5)
+        g.globalAlpha = ua
+        g.fillStyle = "#000"
+        g.beginPath()
+        g.arc(x, y, r * 0.74, 0, TAU)
+        g.fill()
+        g.strokeStyle = "#ffffff"
+        g.lineWidth = 2.5 / zoom
+        g.beginPath()
+        g.arc(x, y, r * 0.74, 0, TAU)
+        g.stroke()
+        g.globalCompositeOperation = "lighter"
+        g.lineCap = "round"
+        g.strokeStyle = b.color
+        for (let k = 0; k < 3; k++) {
+          const rot = clock * (3.2 - k * 0.7) * (k % 2 === 0 ? 1 : -1) + k * 2
+          g.lineWidth = r * (0.16 - 0.03 * k)
+          g.globalAlpha = ua * 0.85
+          g.beginPath()
+          g.arc(x, y, r * (1.05 + 0.2 * k), rot, rot + 2.2)
+          g.stroke()
+        }
+        g.lineCap = "butt"
+        g.globalCompositeOperation = "source-over"
+        g.globalAlpha = ba
+      }
       // outline
       let outline = "#ffffff"
       if (i > 0) {
@@ -960,11 +1870,17 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           outline = C_NEUTRAL
         }
       }
+      if (phased) {
+        g.globalAlpha = 0.5 + 0.45 * Math.sin(clock * 12)
+        outline = "#e6dcff"
+      }
       g.strokeStyle = outline
       g.lineWidth = 3 / zoom
       g.beginPath()
-      g.arc(x, y, r, 0, TAU)
+      if (stretched) g.ellipse(x, y, r * sx, r * sy, ang, 0, TAU)
+      else g.arc(x, y, r, 0, TAU)
       g.stroke()
+      g.globalAlpha = 1
       if (i > 0 && playerAlive && player) {
         const pd = Math.hypot(x - bx[0], y - by[0])
         if (pd < 500 && canAbsorb(b, player)) {
@@ -986,8 +1902,42 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           g.globalAlpha = 1
         }
       }
+      // Singularity ready: a subtle pulsing ring around the player
+      if (i === 0 && b.ult >= 0.999 && !ult) {
+        const ph = (clock * 1.5) % 1
+        g.strokeStyle = "#d9b8ff"
+        g.lineWidth = 2.4 / zoom
+        g.globalAlpha = 0.35 + 0.35 * Math.sin(clock * 5)
+        g.beginPath()
+        g.arc(x, y, r * 1.7, 0, TAU)
+        g.stroke()
+        g.globalAlpha = 0.4 * (1 - ph)
+        g.beginPath()
+        g.arc(x, y, r * (1.7 + 0.9 * ph), 0, TAU)
+        g.stroke()
+        g.globalAlpha = 1
+      }
+      // magnet: rotating dashed ring at the pull radius
+      if (magnet) {
+        g.globalAlpha = 0.4
+        g.strokeStyle = C_PLAYER
+        g.lineWidth = 2 / zoom
+        setDash(16, 12)
+        g.lineDashOffset = -clock * 40
+        g.beginPath()
+        g.arc(x, y, mr, 0, TAU)
+        g.stroke()
+        g.setLineDash(NO_DASH)
+        g.lineDashOffset = 0
+        g.globalAlpha = 1
+      }
       // shield
       if (b.shield > 0) {
+        g.globalAlpha = 0.07 + 0.04 * Math.sin(clock * 6)
+        g.fillStyle = C_TEXT
+        g.beginPath()
+        g.arc(x, y, r * 1.4, 0, TAU)
+        g.fill()
         g.globalAlpha = 0.55 + 0.4 * Math.sin(clock * 10)
         g.strokeStyle = C_TEXT
         g.lineWidth = 2 / zoom
@@ -1007,11 +1957,21 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     setScreen()
     g.textAlign = "center"
     g.textBaseline = "alphabetic"
-    // bot labels
+    // bot labels, skill pips (endless) and the leader crown
     const bs = world.bodies
+    const endless = world.mode === "endless"
+    let leader = -1
+    if (endless) {
+      let best = -1
+      for (let i = 0; i < bs.length; i++) {
+        if (bs[i].alive && bs[i].mass > best) {
+          best = bs[i].mass
+          leader = i
+        }
+      }
+    }
     g.font = "12px " + FONT
-    g.fillStyle = "rgba(255,255,255,0.75)"
-    for (let i = 1; i < bs.length; i++) {
+    for (let i = 0; i < bs.length; i++) {
       const b = bs[i]
       if (!b.alive) continue
       const x = bx[i]
@@ -1019,7 +1979,40 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       if (!visible(x, y, b.radius * 2)) continue
       const sx = (x - camX) * zoom + W / 2 + shx
       const sy = (y - camY) * zoom + H / 2 + shy - b.radius * zoom * clamp(1 + popX[i], 0.6, 1.6) - 8
-      g.fillText(b.name + "  " + Math.round(b.mass), sx, sy)
+      let crownY = sy - 2
+      if (i > 0) {
+        const label = b.name + "  " + Math.round(b.mass)
+        g.fillStyle = "rgba(255,255,255,0.75)"
+        g.fillText(label, sx, sy)
+        if (endless) {
+          const n = b.skill === "hard" ? 3 : b.skill === "normal" ? 2 : 1
+          g.fillStyle = b.skill === "hard" ? C_THREAT : b.skill === "normal" ? C_AMBER : "#9fb3c8"
+          const px0 = sx + label.length * 3.2 + 8
+          for (let k = 0; k < n; k++) {
+            g.beginPath()
+            g.arc(px0 + k * 6, sy - 4, 2, 0, TAU)
+            g.fill()
+          }
+        }
+        crownY = sy - 17
+      }
+      if (i === leader) {
+        // crown: five-point silhouette drawn from paths
+        g.fillStyle = "#ffd166"
+        g.strokeStyle = "rgba(60,35,0,0.7)"
+        g.lineWidth = 1
+        g.beginPath()
+        g.moveTo(sx - 7, crownY)
+        g.lineTo(sx - 8, crownY - 8)
+        g.lineTo(sx - 3.5, crownY - 4)
+        g.lineTo(sx, crownY - 10)
+        g.lineTo(sx + 3.5, crownY - 4)
+        g.lineTo(sx + 8, crownY - 8)
+        g.lineTo(sx + 7, crownY)
+        g.closePath()
+        g.fill()
+        g.stroke()
+      }
     }
     // floating texts
     g.lineJoin = "round"
@@ -1040,9 +2033,12 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   }
 
   /** HUD exclusion zones (CSS px) that off-screen arrows must stay out of. */
+  // Set by drawIndicators: Endless shows a DOM leaderboard on the right that arrows must avoid.
+  let lbZone = false
   function blocked(x: number, y: number): boolean {
     const pad = 14
     if (x < 215 + pad && y < 145 + pad) return true
+    if (lbZone && (touch ? x > W - 172 - pad && y > 176 - pad && y < 340 + pad : x > W - 232 - pad && y > 52 - pad && y < 300 + pad)) return true
     if (x > W / 2 - 80 - pad && x < W / 2 + 80 + pad && y < 70 + pad) return true
     if (x > W - 110 - pad && y < 70 + pad) return true
     const mx = touch ? W - 12 - 56 : W - 18 - 56
@@ -1053,6 +2049,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   }
 
   function drawIndicators(world: World, player: Body, ppx: number, ppy: number) {
+    lbZone = world.mode === "endless"
     const left = 24
     const top = 80
     const right = W - 24
@@ -1136,7 +2133,8 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     const R = 56
     const mx = touch ? W - 12 - R : W - 18 - R
     const my = touch ? 64 + R : H - 18 - R
-    const k = R / world.arenaRadius
+    const base = world.arenaBase > 0 ? world.arenaBase : world.arenaRadius
+    const k = R / base
     g.fillStyle = "rgba(2,3,10,0.7)"
     g.beginPath()
     g.arc(mx, my, R, 0, TAU)
@@ -1144,20 +2142,59 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     g.strokeStyle = "rgba(94,242,255,0.5)"
     g.lineWidth = 1.5
     g.stroke()
-    // crystals
-    g.fillStyle = C_PLAYER
+    // escalation: the closing wall in red
+    if (world.arenaRadius < base - 0.5) {
+      g.strokeStyle = "rgba(255,77,109,0.85)"
+      g.lineWidth = 1.5
+      g.beginPath()
+      g.arc(mx, my, world.arenaRadius * k, 0, TAU)
+      g.stroke()
+    }
+    // zones
+    for (let i = 0; i < world.zones.length; i++) {
+      const z = world.zones[i]
+      g.globalAlpha = 0.28
+      g.fillStyle = z.kind === "nebula" ? "#8a62d6" : z.kind === "repulsor" ? C_AMBER : "#7bed9f"
+      g.beginPath()
+      g.arc(mx + z.x * k, my + z.y * k, Math.max(2, z.r * k), 0, TAU)
+      g.fill()
+    }
+    g.globalAlpha = 1
+    // cosmic event focus
+    const ev = world.cosmic
+    if (ev && (ev.kind === "meteorShower" || ev.kind === "solarFlare" || ev.kind === "nebulaDrift" || ev.kind === "quantumAnomaly")) {
+      g.strokeStyle = "#ffffff"
+      g.lineWidth = 1
+      setDash(3, 3)
+      g.beginPath()
+      g.arc(mx + ev.x * k, my + ev.y * k, Math.max(3, ev.r * k), 0, TAU)
+      g.stroke()
+      g.setLineDash(NO_DASH)
+    }
+    // crystals, comets
     const ds = world.debris
     for (let i = 0; i < ds.length; i++) {
       const d = ds[i]
-      if (d.kind !== "crystal") continue
-      g.fillRect(mx + d.x * k - 1, my + d.y * k - 1, 2, 2)
+      if (d.kind === "crystal") {
+        g.fillStyle = C_PLAYER
+        g.fillRect(mx + d.x * k - 1, my + d.y * k - 1, 2, 2)
+      } else if (d.kind === "comet") {
+        g.fillStyle = "#ffffff"
+        g.fillRect(mx + d.x * k - 1.5, my + d.y * k - 1.5, 3, 3)
+      }
     }
-    // wells and wormholes
+    // pickups
+    for (let i = 0; i < world.pickups.length; i++) {
+      const p = world.pickups[i]
+      g.fillStyle = PICK_COL[p.kind]
+      g.fillRect(mx + p.x * k - 1.5, my + p.y * k - 1.5, 3, 3)
+    }
+    // wells (moving ones at their current position) and wormholes
     for (let i = 0; i < world.wells.length; i++) {
       const w = world.wells[i]
-      g.fillStyle = w.kind === "star" ? C_AMBER : "#ff4d8d"
+      g.fillStyle = MINI_WELL[w.kind]
       g.beginPath()
-      g.arc(mx + w.x * k, my + w.y * k, 3, 0, TAU)
+      g.arc(mx + w.x * k, my + w.y * k, w.kind === "neutronstar" || w.kind === "whitedwarf" ? 2.2 : 3, 0, TAU)
       g.fill()
     }
     g.fillStyle = C_WORM
@@ -1212,13 +2249,26 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       const hz = vigAmber ? 1 : 2
       const pulse = reduced ? 0.6 : 0.5 + 0.5 * Math.sin(clock * TAU * hz)
       g.globalAlpha = (vigAmber ? 0.14 : 0.25) * vigI * (reduced ? 0.6 : 0.25 + 0.75 * pulse)
-      g.drawImage(vigAmber ? getVignette(true) : getVignette(false), 0, 0, W, H)
+      g.drawImage(getVignette(vigAmber ? VIG_AMBER : VIG_RED), 0, 0, W, H)
       g.globalAlpha = 1
     }
     // white flash
     if (flashT > 0 && !reduced) {
       g.globalAlpha = 0.12 * (flashT / 0.08)
       g.fillStyle = "#ffffff"
+      g.fillRect(0, 0, W, H)
+      g.globalAlpha = 1
+    }
+    // gravity storm: violet screen-edge tint
+    if (world.cosmic && world.cosmic.kind === "gravityStorm") {
+      g.globalAlpha = reduced ? 0.1 : 0.1 + 0.05 * Math.sin(clock * 3)
+      g.drawImage(getVignette(VIG_VIOLET), 0, 0, W, H)
+      g.globalAlpha = 1
+    }
+    // cosmic event start / warning: a short flash in the event's colour
+    if (evFlashT > 0 && !reduced) {
+      g.globalAlpha = 0.16 * (evFlashT / 0.35)
+      g.fillStyle = `rgb(${evFlashRgb})`
       g.fillRect(0, 0, W, H)
       g.globalAlpha = 1
     }
@@ -1230,6 +2280,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   function render(world: World, alpha: number, frameDt: number) {
     const dt = frameDt > 0 ? Math.min(frameDt, 0.1) : 0
     clock += dt
+    curAlpha = alpha
     if (!camInit || nebSeed !== world.seed) {
       if (!camInit) reset(world)
       else placeNebulae(world.seed)
@@ -1287,11 +2338,48 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
         shy = 0
       }
       if (flashT > 0) flashT = Math.max(0, flashT - dt)
+      if (evFlashT > 0) evFlashT = Math.max(0, evFlashT - dt)
     }
 
     playerSx = (ppx - camX) * zoom + W / 2
     playerSy = (ppy - camY) * zoom + H / 2
 
+    // dash stretch / slingshot timers
+    for (let i = 0; i < n; i++) {
+      if (dashT[i] > 0) dashT[i] -= dt
+      if (slingT[i] > 0) slingT[i] -= dt
+    }
+    // wormhole relocation (wormhole storm): flash where each end was and where it landed
+    {
+      const whs = world.wormholes
+      if (whs.length >= 2) {
+        if (whInit) {
+          for (let i = 0; i < 2; i++) {
+            const w = whs[i]
+            if (Math.hypot(w.x - whPrev[i * 2], w.y - whPrev[i * 2 + 1]) > 30) {
+              flashAt(whPrev[i * 2], whPrev[i * 2 + 1], 160, C_WORM)
+              flashAt(w.x, w.y, 200, "#ffffff")
+              burst(w.x, w.y, 20, 80, 300, 0.5, 3, C_WORM, true)
+            }
+          }
+        }
+        for (let i = 0; i < 2; i++) {
+          whPrev[i * 2] = whs[i].x
+          whPrev[i * 2 + 1] = whs[i].y
+        }
+        whInit = true
+      }
+    }
+    // comet sparkles
+    if (dt > 0) {
+      const ds = world.debris
+      for (let i = 0; i < ds.length; i++) {
+        const d = ds[i]
+        if (d.kind !== "comet" || Math.random() > dt * 35) continue
+        if (!visible(d.x, d.y, 200)) continue
+        addP(P_DOT, d.x + (Math.random() - 0.5) * d.radius, d.y + (Math.random() - 0.5) * d.radius, (Math.random() - 0.5) * 50 - d.vx * 0.1, (Math.random() - 0.5) * 50 - d.vy * 0.1, 0.5, 2.2 / zoom, "#bfe9ff", false)
+      }
+    }
     // springs
     if (dt > 0) {
       const steps = Math.max(1, Math.ceil(dt / (1 / 120)))
@@ -1343,6 +2431,28 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
                 b.color,
                 false,
               )
+            }
+          }
+        }
+        if (b.power.overdrive > 0) {
+          emitPow[i] += dt * (reduced ? 12 : 30)
+          if (emitPow[i] > 4) emitPow[i] = 4
+          while (emitPow[i] >= 1) {
+            emitPow[i] -= 1
+            const a = Math.random() * TAU
+            addP(P_DOT, x + Math.cos(a) * b.radius, y + Math.sin(a) * b.radius, Math.cos(a) * 50 + (Math.random() - 0.5) * 40, Math.sin(a) * 50 - 30, 0.4 + Math.random() * 0.2, 2.2 / zoom, C_AMBER, false)
+          }
+        }
+        if (slingT[i] > 0) {
+          const sp = Math.hypot(b.vx, b.vy)
+          if (sp > 50) {
+            emitSling[i] += dt * 50
+            if (emitSling[i] > 3) emitSling[i] = 3
+            while (emitSling[i] >= 1) {
+              emitSling[i] -= 1
+              const ox = (Math.random() - 0.5) * b.radius
+              const oy = (Math.random() - 0.5) * b.radius
+              addP(P_LINE, x + ox, y + oy, (-b.vx / sp) * sp * 0.08, (-b.vy / sp) * sp * 0.08, 0.28, 3.5 / zoom, "#e8f6ff", false)
             }
           }
         }
@@ -1422,9 +2532,13 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     drawBackground()
     setWorld()
     drawNebulae()
+    drawZones(world)
     drawArena(world, player, ppx, ppy)
+    drawOrbits(world)
     drawWells(world, player)
     drawWormholes(world)
+    drawMeteors(world)
+    drawPickups(world)
     drawDebris(world, alpha)
     drawPulls(world)
     drawParticles()
@@ -1439,8 +2553,12 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     discCache.clear()
     bodyDiscCache.clear()
     ringSprite = null
-    vignetteSprite = null
-    vignetteAmber = null
+    vignetteCache.clear()
+    fogSprites.length = 0
+    planetSprites.length = 0
+    beamSprite = null
+    beamCore = null
+    tailSprite = null
     tilePatterns = []
     pn = 0
   }

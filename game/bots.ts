@@ -5,7 +5,8 @@
 // brain fields' logic in the PRIVATE section at the bottom.
 
 import { CONFIG } from "./config"
-import { canAbsorb, maxSpeed, pullRadius } from "./engine"
+import { gmScale, lethalRadius } from "./cosmic"
+import { canAbsorb, maxSpeed, pullRadius, repulseRadius } from "./engine"
 import { rand, randRange, seedState } from "./rng"
 import type { Body, Difficulty, Intent, World } from "./types"
 
@@ -67,6 +68,20 @@ export function createBotBrain(bodyId: string, difficulty: Difficulty, seed: num
  *   comfortably above CONFIG.energy.lowThreshold.
  * - Add aim noise of up to `noise` radians per decision; coast (zero thrust) briefly when
  *   energy is very low so it can regenerate.
+ *
+ * Phase A behaviours (all gated by difficulty: easy uses none of the abilities, normal uses
+ * dash and repulse, hard uses all three; usage frequency scales with aggression):
+ * - Dash to escape a threat that is closing fast, or to lunge at prey within ~1.5x pull radius.
+ * - Repulse when a rival it cannot beat is within the repulse radius (escape), or when a rival
+ *   sits between it and a lethal well (shove it in).
+ * - Singularity (hard only) when ult === 1 and absorbable prey or a dense debris patch is near.
+ * - Treat pickups as high-value graze targets (bulk and phase most), and comets as big debris.
+ * - Cosmic events: avoid a flaring star's flare radius during warning and active stages; seek an
+ *   active meteor shower or quantum anomaly when no threat is near; treat lethal wells as
+ *   stronger during a gravity storm (scale the survival margin by gmScale).
+ * - Pulsar beams: steer out of a beam's current sweep when inside its length.
+ * Ability flags follow the Intent contract (true only on the decision step that wants them;
+ * botIntent returns them only on decision steps, never repeated between decisions).
  */
 export function botIntent(world: World, brain: BotBrain): Intent {
   let me: Body | undefined
@@ -82,8 +97,10 @@ export function botIntent(world: World, brain: BotBrain): Intent {
   if (brain.thinkIn > 0) return { ax: brain.current.ax, ay: brain.current.ay, pull: brain.current.pull }
   brain.thinkIn += CONFIG.difficulty[brain.difficulty].reaction
 
-  brain.current = decide(world, brain, me)
-  return { ax: brain.current.ax, ay: brain.current.ay, pull: brain.current.pull }
+  const it = decide(world, brain, me)
+  // Held between decisions without ability flags: a press is one step only.
+  brain.current = { ax: it.ax, ay: it.ay, pull: it.pull }
+  return it
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -103,48 +120,91 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
   return Math.hypot(px - (ax + sx * t), py - (ay + sy * t))
 }
 
-/** True if the straight line me -> (tx, ty) passes within well.radius + 80 of any well. */
+/** True if the straight line me -> (tx, ty) passes within a well's danger radius + 80 (solid wells: + 30). */
 function crossesWell(world: World, me: Body, tx: number, ty: number): boolean {
   for (const w of world.wells) {
-    if (distToSegment(w.x, w.y, me.x, me.y, tx, ty) < w.radius + 80) return true
+    const reach = w.lethal ? lethalRadius(world, w) + 80 : w.radius + 30
+    if (distToSegment(w.x, w.y, me.x, me.y, tx, ty) < reach) return true
   }
   return false
 }
+
+const TWO_PI = Math.PI * 2
+
+function angGap(a: number, b: number): number {
+  let d = Math.abs(a - b) % TWO_PI
+  if (d > Math.PI) d = TWO_PI - d
+  return d
+}
+
+/** Relative worth of a power-up, in "mass of dust" units for the graze score. */
+const PICKUP_VALUE = { bulk: 30, phase: 24, overdrive: 14, magnet: 10 } as const
 
 /** One re-decision. Pure with respect to `world`; only advances brain.rngState / memory. */
 function decide(world: World, brain: BotBrain, me: Body): Intent {
   const profile = CONFIG.difficulty[brain.difficulty]
   const caution = profile.caution
   const energyLow = CONFIG.energy.lowThreshold
+  // Ability tier: easy none, normal dash + repulse, hard all three.
+  const tier = brain.difficulty === "easy" ? 0 : brain.difficulty === "normal" ? 1 : 2
+  const gms = gmScale(world)
+  const ev = world.cosmic
   let sx = 0
   let sy = 0
 
-  // 1. Wells: survival, highest priority.
+  // 1. Wells: survival, highest priority. Moving wells are looked ahead 0.5 s.
   let wellMax = 0
   for (const w of world.wells) {
-    const dx = me.x - w.x
-    const dy = me.y - w.y
+    const dx = me.x - (w.x + w.vx * 0.5)
+    const dy = me.y - (w.y + w.vy * 0.5)
     const d = Math.max(Math.hypot(dx, dy), 1e-6)
     const ux = dx / d
     const uy = dy / d
-    const inward = Math.max(0, -(me.vx * ux + me.vy * uy))
-    // A low-energy bot tolerates a star's charge band instead of fleeing it.
-    const kindScale = w.kind === "blackhole" ? 1.4 : me.energy < 35 ? 0.3 : 1
-    const margin = (180 + me.radius * 3) * (0.5 + caution) * kindScale + inward * 0.6
-    const danger = w.radius + me.radius + margin
-    if (d >= 2 * danger) continue
-    const f = clamp((2 * danger - d) / danger, 0, 3)
-    const weight = 3 * f * f
-    // Tangent (perpendicular to the away direction) in the sense the body already circles.
-    let tx = -uy
-    let ty = ux
-    if (me.vx * tx + me.vy * ty < 0) {
-      tx = -tx
-      ty = -ty
+    const inward = Math.max(0, -((me.vx - w.vx) * ux + (me.vy - w.vy) * uy))
+    if (w.lethal) {
+      let rad = lethalRadius(world, w)
+      if (ev && ev.kind === "solarFlare" && ev.stage === "warning" && ev.targetId === w.id) {
+        rad = w.radius * CONFIG.cosmic.solarFlare.radiusMul
+      }
+      // A low-energy bot tolerates a charging well's band instead of fleeing it.
+      const kindScale = w.kind === "blackhole" ? 1.4 : me.energy < 35 && w.chargeRadius > 0 ? 0.3 : 1
+      const margin = (180 + me.radius * 3) * (0.5 + caution) * kindScale * gms + inward * 0.6
+      const danger = rad + me.radius + margin
+      if (d < 2 * danger) {
+        const f = clamp((2 * danger - d) / danger, 0, 3)
+        const weight = 3 * f * f
+        // Tangent (perpendicular to the away direction) in the sense the body already circles.
+        let tx = -uy
+        let ty = ux
+        if (me.vx * tx + me.vy * ty < 0) {
+          tx = -tx
+          ty = -ty
+        }
+        sx += weight * (0.7 * ux + 0.3 * tx)
+        sy += weight * (0.7 * uy + 0.3 * ty)
+        if (weight > wellMax) wellMax = weight
+      }
+    } else {
+      // Solid wells are not deadly: just do not ram them at speed.
+      const danger = w.radius + me.radius + 30 + inward * 0.4
+      if (d < 2 * danger) {
+        const f = clamp((2 * danger - d) / danger, 0, 2)
+        sx += 0.8 * f * f * ux
+        sy += 0.8 * f * f * uy
+      }
     }
-    sx += weight * (0.7 * ux + 0.3 * tx)
-    sy += weight * (0.7 * uy + 0.3 * ty)
-    if (weight > wellMax) wellMax = weight
+    if (w.beam && d < w.beam.length + 50) {
+      // Leave the beam's sweep: it moves with +w, so slide the other way to exit its trailing edge.
+      const th = w.beam.phase + w.beam.w * world.time
+      const phi = Math.atan2(dy, dx)
+      const gap = Math.min(angGap(phi, th), angGap(phi, th + Math.PI))
+      if (gap < w.beam.halfWidth + 0.12 + Math.abs(w.beam.w) * 0.5) {
+        const sgn = w.beam.w >= 0 ? -1 : 1
+        sx += 2.5 * sgn * -uy
+        sy += 2.5 * sgn * ux
+        if (wellMax < 2.5) wellMax = 2.5
+      }
+    }
   }
   const wellPanic = wellMax > 2
 
@@ -159,6 +219,9 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
 
   // 3. Threats (bigger rivals) and 4. prey, in one pass over the bodies.
   let threat = false
+  let fastThreat = false
+  let escapeRepulse = false
+  let shove = false
   let prey: Body | undefined
   let preyScore = 0
   let preyAx = 0
@@ -167,6 +230,7 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
   const speedMe = Math.max(maxSpeed(me.mass), 1)
   const huntOpen = world.time >= profile.huntGrace
   const pr = pullRadius(me)
+  const rr = repulseRadius(me)
   // Prey hysteresis: the previously chosen prey stays unless another is > 1.3x better.
   const keepPreyId = brain.memory.prey
   let keepPreyScore = 0
@@ -191,6 +255,9 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
         const weight = 2.5 * (1 - d / range) * (0.5 + caution)
         sx += (ax / al) * weight
         sy += (ay / al) * weight
+        const closing = -((r.vx - me.vx) * dx + (r.vy - me.vy) * dy) / Math.max(d, 1e-6)
+        if (closing > 90 && d < range * 0.7) fastThreat = true
+        if (d < rr * 0.85) escapeRepulse = true
       }
     } else if (!wellPanic && huntOpen && canAbsorb(me, r) && r.shield === 0 && d < 500 + 400 * profile.aggression) {
       const score = r.mass / (d + 50)
@@ -217,6 +284,19 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
         }
       }
     }
+    // A rival sitting between us and a lethal well can be shoved in with a repulse.
+    if (tier > 0 && huntOpen && !shove && d < rr * 0.9 && d > 1e-6 && r.shield === 0) {
+      for (const w of world.wells) {
+        if (!w.lethal) continue
+        const wx = w.x - r.x
+        const wy = w.y - r.y
+        const wd = Math.hypot(wx, wy)
+        if (wd < 380 && wd > 1e-6 && (dx * wx + dy * wy) / (d * wd) > 0.8) {
+          shove = true
+          break
+        }
+      }
+    }
   }
   if (keepPrey && keepPrey !== prey && keepPreyScore * 1.3 >= preyScore) {
     prey = keepPrey
@@ -234,65 +314,117 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
     sy += (dy / dl) * weight
   }
 
-  // 5. Graze: best debris by mass / distance (crystals worth more when energy is low).
+  // 4b. Zones: a fleeing bot stays out of drag clouds; seek a quantum anomaly to charge up.
+  for (const z of world.zones) {
+    const dx = z.x - me.x
+    const dy = z.y - me.y
+    const d = Math.max(Math.hypot(dx, dy), 1e-6)
+    if (z.kind === "nebula" && threat && d < z.r + 80) {
+      sx -= (dx / d) * 1.0
+      sy -= (dy / d) * 1.0
+    } else if (z.kind === "anomaly" && !threat && !wellPanic && me.ult < 1 && (tier === 2 || me.energy < 60)) {
+      if (d > z.r * 0.4 && d < 1100) {
+        sx += (dx / d) * 1.1
+        sy += (dy / d) * 1.1
+      }
+    }
+  }
+  // An active meteor shower is free mass: go and stand in it.
+  if (ev && ev.kind === "meteorShower" && ev.stage === "active" && !threat && !wellPanic) {
+    const dx = ev.x - me.x
+    const dy = ev.y - me.y
+    const d = Math.max(Math.hypot(dx, dy), 1e-6)
+    if (d > ev.r * 0.5 && d < 1400) {
+      sx += (dx / d) * 0.7
+      sy += (dy / d) * 0.7
+    }
+  }
+
+  // 5. Graze: best food by value / distance. Debris, comets (led by velocity) and power-ups.
   let nearDebris = 0
-  let debris: { x: number; y: number } | undefined
-  let debrisScore = 0
-  let debrisD = 0
-  // Debris hysteresis: keep the previous piece while it exists and is within 1.3x of the best.
-  const keepDebrisId = typeof brain.memory.debris === "number" ? brain.memory.debris : -1
-  let keepDebris: { x: number; y: number; id: number } | undefined
-  let keepDebrisScore = 0
-  let keepDebrisD = 0
+  let targetD = Infinity
   let pickedId = -1
+  let bestScore = 0
+  let bestAx = 0
+  let bestAy = 0
+  let bestD = 0
+  const keepDebrisId = typeof brain.memory.debris === "number" ? brain.memory.debris : -1
+  let keepScore = 0
+  let keepFound = false
+  let keepAx2 = 0
+  let keepAy2 = 0
+  let keepD2 = 0
   const crystalMul = me.energy < 50 ? 6 : 2
+  const consider = (id: number, ax: number, ay: number, score: number, d: number): void => {
+    const isKeep = id === keepDebrisId
+    if ((score > bestScore || isKeep) && !crossesWell(world, me, ax, ay)) {
+      if (isKeep) {
+        keepFound = true
+        keepScore = score
+        keepAx2 = ax
+        keepAy2 = ay
+        keepD2 = d
+      }
+      if (score > bestScore) {
+        bestScore = score
+        pickedId = id
+        bestAx = ax
+        bestAy = ay
+        bestD = d
+      }
+    }
+  }
   if (!wellPanic) {
+    for (const p of world.pickups) {
+      const d = Math.hypot(p.x - me.x, p.y - me.y)
+      if (d > 800 || p.ttl < d / speedMe) continue
+      consider(p.id, p.x, p.y, PICKUP_VALUE[p.kind] / (d + 30), d)
+    }
     for (const c of world.debris) {
       const dx = c.x - me.x
       const dy = c.y - me.y
       const d2 = dx * dx + dy * dy
       if (d2 < pr * pr) nearDebris++
-      if (d2 > 600 * 600) continue
+      const comet = c.kind === "comet"
+      if (d2 > (comet ? 700 * 700 : 600 * 600)) continue
       const d = Math.sqrt(d2)
-      const score = (c.kind === "crystal" ? c.mass * crystalMul : c.mass) / (d + 30)
-      const isKeep = c.id === keepDebrisId
-      if ((score > debrisScore || isKeep) && !crossesWell(world, me, c.x, c.y)) {
-        if (isKeep) {
-          keepDebris = c
-          keepDebrisScore = score
-          keepDebrisD = d
-        }
-        if (score > debrisScore) {
-          debris = c
-          debrisScore = score
-          debrisD = d
-          pickedId = c.id
-        }
+      let ax = c.x
+      let ay = c.y
+      if (comet) {
+        // Comets are fast: skip ones running away, lead the rest.
+        if ((c.vx * dx + c.vy * dy) / Math.max(d, 1e-6) > speedMe * 0.9) continue
+        const lead = Math.min(d / speedMe, 1.5) * Math.max(profile.aimLead, 0.5)
+        ax += c.vx * lead
+        ay += c.vy * lead
       }
+      const score = (c.kind === "crystal" ? c.mass * crystalMul : c.mass) / (d + 30)
+      consider(c.id, ax, ay, score, d)
     }
-    if (keepDebris && keepDebris.id !== pickedId && keepDebrisScore * 1.3 >= debrisScore) {
-      debris = keepDebris
-      debrisD = keepDebrisD
-      pickedId = keepDebris.id
+    if (keepFound && keepScore * 1.3 >= bestScore && pickedId !== keepDebrisId) {
+      pickedId = keepDebrisId
+      bestAx = keepAx2
+      bestAy = keepAy2
+      bestD = keepD2
     }
     brain.memory.debris = pickedId
-    if (debris) {
-      const dx = debris.x - me.x
-      const dy = debris.y - me.y
+    if (pickedId !== -1) {
+      const dx = bestAx - me.x
+      const dy = bestAy - me.y
       const dl = Math.max(Math.hypot(dx, dy), 1e-6)
       const weight = prey ? 1 - profile.aggression : 1
       sx += (dx / dl) * weight
       sy += (dy / dl) * weight
+      targetD = bestD
     }
   }
 
-  // 6. Charge: low energy, no threat -> nearest star.
+  // 6. Charge: low energy, no threat -> nearest charging well (stations are safe, stars are not).
   let halfThrust = false
   if (me.energy < 35 && !threat && !wellPanic) {
     let star: (typeof world.wells)[number] | undefined
     let starD = Infinity
     for (const w of world.wells) {
-      if (w.kind !== "star") continue
+      if (w.chargeRadius <= 0 || w.chargeRate <= 0 || w.kind === "pulsar") continue
       const d = Math.hypot(w.x - me.x, w.y - me.y)
       if (d < starD) {
         starD = d
@@ -349,8 +481,8 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
   if (me.energy < 10 && !threat && !wellPanic) mag = 0
   else if (halfThrust) mag *= 0.5
   else {
-    const targetD = prey ? preyD : debris ? debrisD : Infinity
-    if (targetD < me.radius * 2) mag *= 0.5
+    const tD = prey ? preyD : targetD
+    if (tD < me.radius * 2) mag *= 0.5
   }
 
   // Pull.
@@ -361,5 +493,28 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
     if (pull && world.time < profile.huntGrace && rivalInPull) pull = false
   }
 
-  return { ax: dirX * mag, ay: dirY * mag, pull }
+  const out: Intent = { ax: dirX * mag, ay: dirY * mag, pull }
+
+  // Abilities (decision steps only; frequency scales with aggression).
+  if (tier > 0) {
+    const aggr = profile.aggression
+    const A = CONFIG.abilities
+    if (me.dashCd <= 0 && me.energy >= A.dash.cost + 8 && mag > 0 && !wellPanic) {
+      if (fastThreat) {
+        if (rand(brain) < 0.5 + 0.5 * aggr) out.dash = true
+      } else if (prey && preyD < 1.5 * pr && preyD > me.radius * 3) {
+        const pdx = preyAx - me.x
+        const pdy = preyAy - me.y
+        const align = (dirX * pdx + dirY * pdy) / Math.max(Math.hypot(pdx, pdy), 1e-6)
+        if (align > 0.85 && rand(brain) < 0.15 + 0.5 * aggr) out.dash = true
+      }
+    }
+    if (me.repulseCd <= 0 && me.energy >= A.repulse.cost + 5) {
+      if (escapeRepulse) {
+        if (rand(brain) < 0.6 + 0.4 * aggr) out.repulse = true
+      } else if (shove && rand(brain) < 0.2 + 0.6 * aggr) out.repulse = true
+    }
+    if (tier === 2 && me.ult >= 1 && ((prey !== undefined && preyD < pr * 1.3) || nearDebris >= 5)) out.ult = true
+  }
+  return out
 }

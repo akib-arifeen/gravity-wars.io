@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react"
 import { CONFIG } from "@/game/config"
-import type { HudSnapshot } from "@/game/types"
+import { ARENAS } from "@/game/arenas"
+import { COSMIC_INFO } from "@/game/cosmic"
+import type { HudSnapshot, LeaderboardEntry } from "@/game/types"
+import { AbilityIcon, WallIcon } from "./Icons"
 
 interface HudProps {
   hud: HudSnapshot | null
@@ -11,6 +14,11 @@ interface HudProps {
   onToggleMute(): void
   /** True while a modal overlay is open, so Tab cannot reach the buttons behind it. */
   inert?: boolean
+  layout: "desktop" | "touch"
+  /** Desktop ability slots are clickable. */
+  onPress(kind: "dash" | "repulse" | "ult"): void
+  /** Endless: why the player died, for the respawn overlay. */
+  deathText?: string
 }
 
 function formatTime(s: number): string {
@@ -48,9 +56,14 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
   )
 }
 
-export function Hud({ hud, muted, onPause, onToggleMute, inert }: HudProps) {
+export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress, deathText = "" }: HudProps) {
   const [showGo, setShowGo] = useState(false)
+  const [wallBanner, setWallBanner] = useState(false)
+  const [lbOpen, setLbOpen] = useState(false)
+  const [backFlash, setBackFlash] = useState(false)
+  const prevRespawn = useRef(0)
   const prevPhase = useRef<string | null>(null)
+  const prevEscalating = useRef(false)
 
   const phase = hud?.phase ?? null
   useEffect(() => {
@@ -65,6 +78,33 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert }: HudProps) {
     }
   }, [phase])
 
+  const ed = hud?.endless ?? null
+  const respawnIn = ed?.respawnIn ?? 0
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (prevRespawn.current > 0 && respawnIn <= 0) {
+      setBackFlash(true)
+      timer = setTimeout(() => setBackFlash(false), 1600)
+    }
+    prevRespawn.current = respawnIn
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+  }, [respawnIn])
+
+  const escalating = hud?.escalating ?? false
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (escalating && !prevEscalating.current) {
+      setWallBanner(true)
+      timer = setTimeout(() => setWallBanner(false), 3200)
+    }
+    prevEscalating.current = escalating
+    return () => {
+      if (timer) clearTimeout(timer)
+    }
+  }, [escalating])
+
   const massPct = hud ? Math.min(100, (hud.mass / hud.criticalMass) * 100) : 0
   const energyPct = hud ? Math.min(100, Math.max(0, (hud.energy / hud.energyMax) * 100)) : 0
   const energyLow = hud ? hud.energy < CONFIG.energy.lowThreshold : false
@@ -75,34 +115,155 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert }: HudProps) {
   if (hud?.charging) status.push("CHARGING")
   if (hud && hud.shield > 0) status.push("SHIELD")
 
+  const chips: { label: string; cls: string; secs: number }[] = []
+  if (hud) {
+    if (hud.power.overdrive > 0) chips.push({ label: "OVERDRIVE", cls: "od", secs: Math.ceil(hud.power.overdrive) })
+    if (hud.power.magnet > 0) chips.push({ label: "MAGNET", cls: "mg", secs: Math.ceil(hud.power.magnet) })
+    if (hud.power.phase > 0) chips.push({ label: "PHASE", cls: "ph", secs: Math.ceil(hud.power.phase) })
+  }
+
+  const cosmic = hud?.cosmic ?? null
+  const cosmicInfo = cosmic ? COSMIC_INFO[cosmic.kind] : null
+  const cosmicText = cosmic && cosmicInfo ? (cosmic.stage === "warning" ? cosmicInfo.warning : cosmicInfo.active) : ""
+  const cosmicTotal = cosmic
+    ? cosmic.stage === "warning"
+      ? CONFIG.cosmic[cosmic.kind].warning
+      : CONFIG.cosmic[cosmic.kind].duration
+    : 1
+  const cosmicPct = cosmic ? Math.min(100, Math.max(0, (cosmic.secondsLeft / Math.max(0.01, cosmicTotal)) * 100)) : 0
+
   const countdownLabel = hud && hud.phase === "countdown" ? String(Math.max(1, hud.countdown)) : showGo ? "GO" : null
+
+  const ab = CONFIG.abilities
+  const ultActive = hud ? hud.ultActive > 0 : false
+  const ultReady = hud ? hud.ult >= 1 && !ultActive : false
+  const slots: { kind: "dash" | "repulse" | "ult"; label: string; key: string; pct: number; low: boolean }[] = hud
+    ? [
+        { kind: "dash", label: "Dash", key: "Shift", pct: hud.dashMax > 0 ? (hud.dashCd / hud.dashMax) * 100 : 0, low: hud.energy < ab.dash.cost },
+        { kind: "repulse", label: "Repulse", key: "E", pct: hud.repulseMax > 0 ? (hud.repulseCd / hud.repulseMax) * 100 : 0, low: hud.energy < ab.repulse.cost },
+        { kind: "ult", label: "Singularity", key: "Q", pct: 100 - Math.min(100, hud.ult * 100), low: false },
+      ]
+    : []
 
   return (
     <div className="gw-hud" inert={inert}>
       {hud && (
         <>
-          <div className="gw-hud-panel gw-hud-left">
-            <div className="gw-hud-label">MASS</div>
-            <div className="gw-hud-mass">
-              <span className="gw-hud-mass-value">{Math.round(hud.mass)}</span>
-              <span className="gw-hud-mass-max"> / {hud.criticalMass}</span>
+          <div className="gw-hud-leftcol">
+            <div className="gw-hud-panel gw-hud-left">
+              <div className="gw-hud-label">{ed ? "SCORE" : "MASS"}</div>
+              <div className="gw-hud-mass">
+                <span className="gw-hud-mass-value">{Math.round(hud.mass)}</span>
+                {!ed && <span className="gw-hud-mass-max"> / {hud.criticalMass}</span>}
+                {ed && <span className="gw-hud-mass-max"> best {Math.round(Math.max(ed.best, hud.mass))}</span>}
+              </div>
+              {ed ? (
+                <div className="gw-hud-kd">
+                  Kills {ed.kills} &middot; Deaths {ed.deaths}
+                </div>
+              ) : (
+                <div className="gw-bar gw-bar-thin" role="presentation">
+                  <div className="gw-bar-fill gw-bar-mass" style={{ width: `${massPct}%` }} />
+                </div>
+              )}
+              <div className="gw-hud-label gw-hud-energy-label">ENERGY</div>
+              <div className={`gw-bar${energyLow ? " gw-bar-low" : ""}`} role="presentation">
+                <div className="gw-bar-fill gw-bar-energy" style={{ width: `${energyPct}%` }} />
+              </div>
+              <div className="gw-hud-status" aria-live="off">
+                {status.join(" / ") || "\u00a0"}
+              </div>
+              {chips.length > 0 && (
+                <div className="gw-chips">
+                  {chips.map((c) => (
+                    <span key={c.label} className={`gw-chip gw-chip-${c.cls}`}>
+                      {c.label} {c.secs}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="gw-bar gw-bar-thin" role="presentation">
-              <div className="gw-bar-fill gw-bar-mass" style={{ width: `${massPct}%` }} />
-            </div>
-            <div className="gw-hud-label gw-hud-energy-label">ENERGY</div>
-            <div className={`gw-bar${energyLow ? " gw-bar-low" : ""}`} role="presentation">
-              <div className="gw-bar-fill gw-bar-energy" style={{ width: `${energyPct}%` }} />
-            </div>
-            <div className="gw-hud-status" aria-live="off">
-              {status.join(" / ") || " "}
-            </div>
+
+            {cosmic && cosmicInfo && (
+              <div key={`${cosmic.kind}-${cosmic.stage}`} className={`gw-cosmic gw-cosmic-${cosmic.stage}`} role="status">
+                <div className="gw-cosmic-title">{cosmicInfo.title}</div>
+                {cosmicText && <div className="gw-cosmic-text">{cosmicText}</div>}
+                <div className="gw-cosmic-bar" role="presentation">
+                  <div className="gw-cosmic-fill" style={{ width: `${cosmicPct}%` }} />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="gw-hud-center">
-            <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{formatTime(hud.timeLeft)}</div>
-            <div className="gw-hud-rank">{hud.rank > 0 ? `Rank ${hud.rank} / ${hud.alive}` : "Eliminated"}</div>
+            {ed ? (
+              <>
+                <div className="gw-hud-tag">ENDLESS</div>
+                <div className="gw-hud-arena">{ARENAS[hud.arena].name}</div>
+                {layout === "touch" && hud.leaderboard.length > 0 && (
+                  <button
+                    type="button"
+                    className="gw-lb-pill"
+                    aria-expanded={lbOpen}
+                    aria-label="Leaderboard"
+                    onClick={() => setLbOpen((o) => !o)}
+                  >
+                    {hud.rank > 0 ? `#${hud.rank} / ${hud.alive}` : "Out"}
+                    {escalating && (
+                      <span className="gw-wall-icon">
+                        <WallIcon size={14} />
+                      </span>
+                    )}
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{formatTime(hud.timeLeft)}</div>
+            )}
+            <div className={`gw-hud-rank${ed ? " gw-hud-rank-ed" : ""}`}>
+              {hud.rank > 0 ? `Rank ${hud.rank} / ${hud.alive}` : "Eliminated"}
+              {escalating && !wallBanner && (
+                <span className="gw-wall-icon" role="img" aria-label="The wall is closing" title="The wall is closing">
+                  <WallIcon />
+                </span>
+              )}
+            </div>
           </div>
+
+          {ed && hud.leaderboard.length > 0 && (
+            <Leaderboard rows={hud.leaderboard} touch={layout === "touch"} open={lbOpen} onToggle={() => setLbOpen((o) => !o)} />
+          )}
+
+          {ed && hud.leaderboard.length > 0 && layout === "touch" && (
+            <Leaderboard rows={hud.leaderboard} touch open={lbOpen} drop onToggle={() => setLbOpen((o) => !o)} />
+          )}
+
+          {wallBanner && (
+            <div className="gw-wall-banner" role="status">
+              THE WALL IS CLOSING
+            </div>
+          )}
+
+          {layout === "desktop" && (
+            <div className="gw-abilities">
+              {slots.map((sl) => (
+                <button
+                  key={sl.kind}
+                  type="button"
+                  className="gw-slot"
+                  aria-label={`${sl.label} (${sl.key})`}
+                  data-low={sl.low ? "1" : undefined}
+                  data-ready={sl.kind === "ult" && (ultReady || ultActive) ? "1" : undefined}
+                  style={{ ["--p" as string]: sl.pct }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onPress(sl.kind)}
+                >
+                  <AbilityIcon kind={sl.kind} />
+                  <span className="gw-slot-key">{sl.kind === "ult" ? (ultActive ? `${Math.ceil(hud.ultActive)}s` : ultReady ? "READY" : sl.key) : sl.key}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </>
       )}
 
@@ -130,8 +291,22 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert }: HudProps) {
         </button>
       </div>
 
+      {ed && respawnIn > 0 && (
+        <div className="gw-death" role="status">
+          <div className="gw-death-box">
+            <div className="gw-death-cause">{deathText || "You were eliminated"}</div>
+            <div className="gw-death-count">Respawning in {Math.max(1, Math.ceil(respawnIn))}...</div>
+            <div className="gw-death-stats">
+              Best {Math.round(ed.best)} &middot; Kills {ed.kills}
+            </div>
+          </div>
+        </div>
+      )}
+      {ed && backFlash && respawnIn <= 0 && <div className="gw-back">Back in the fight</div>}
+
       {hud && hud.phase === "countdown" && (
         <div className="gw-countdown">
+          <div className="gw-countdown-arena">{ARENAS[hud.arena].name}</div>
           <div key={countdownLabel} className="gw-countdown-num">
             {countdownLabel}
           </div>
@@ -143,6 +318,66 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert }: HudProps) {
           <div className="gw-countdown-num gw-countdown-go">GO</div>
         </div>
       )}
+    </div>
+  )
+}
+
+function Leaderboard({
+  rows,
+  touch,
+  open,
+  drop = false,
+  onToggle,
+}: {
+  rows: LeaderboardEntry[]
+  touch: boolean
+  open: boolean
+  /** Dropdown variant for short landscape screens (opened from the rank pill). */
+  drop?: boolean
+  onToggle(): void
+}) {
+  const you = rows.find((r) => r.isPlayer)
+  // Touch shows a compact top 3 plus the player; a tap expands to the full board.
+  let shown = rows
+  if (touch && !open) {
+    shown = rows.slice(0, 3)
+    if (you && !shown.includes(you)) shown = [...shown, you]
+  }
+  const body = (
+    <>
+      <div className="gw-lb-head">
+        <span>LEADERBOARD</span>
+        {touch && <span className="gw-lb-more">{open ? "less" : "more"}</span>}
+      </div>
+      <ol className="gw-lb-list">
+        {shown.map((r, i) => (
+          <li
+            key={r.id}
+            className={`${r.isPlayer ? "gw-lb-you" : ""}${i > 0 && r.rank - shown[i - 1].rank > 1 ? " gw-lb-gap" : ""}`}
+          >
+            <span className="gw-lb-rank">{r.rank}</span>
+            <span className="gw-dot" style={{ background: r.color }} />
+            <span className="gw-lb-name">{r.name}</span>
+            <span className="gw-lb-mass">{Math.round(r.mass)}</span>
+          </li>
+        ))}
+      </ol>
+    </>
+  )
+  return touch ? (
+    <button
+      type="button"
+      className={`gw-lb ${drop ? "gw-lb-drop" : "gw-lb-touch"}`}
+      data-open={open ? "1" : undefined}
+      aria-expanded={open}
+      aria-label="Leaderboard"
+      onClick={onToggle}
+    >
+      {body}
+    </button>
+  ) : (
+    <div className="gw-lb" aria-label="Leaderboard">
+      {body}
     </div>
   )
 }
