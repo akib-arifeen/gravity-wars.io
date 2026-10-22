@@ -41,6 +41,11 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
   // True only for a mouse press that began on the canvas; a press that began on a HUD button
   // and drags over the game must not thrust.
   let pressOnCanvas = false
+  // When embedded, a drag released outside the iframe may never reach us (no pointerup, no
+  // leave). Mouse thrust therefore lapses after this long without any pointer event; the next
+  // movement resumes it. Removing this lets the ship thrust forever after such a release.
+  const MOUSE_STALE_MS = 2500
+  let lastPointerAt = 0
   let virtual: Intent | null = null
 
   const LEFT = ["KeyA", "ArrowLeft"]
@@ -87,6 +92,7 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
     mx = e.clientX - r.left
     my = e.clientY - r.top
     haveMouse = true
+    lastPointerAt = performance.now()
     mouseButtons = pressOnCanvas ? e.buttons & 3 : 0
   }
 
@@ -95,6 +101,19 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
     if (e.pointerType !== "mouse") return
     pressOnCanvas = true
     setMouseFrom(e)
+    // Capture so the release still reaches us when the drag ends outside the canvas, including
+    // outside the iframe when embedded. Without it the ship keeps thrusting after release.
+    try {
+      canvas.setPointerCapture(e.pointerId)
+    } catch {
+      // Pointer already gone; the window listeners still clear state on the next event.
+    }
+  }
+
+  const onLostCapture = (e: PointerEvent) => {
+    if (e.pointerType !== "mouse") return
+    mouseButtons = 0
+    pressOnCanvas = false
   }
 
   const onWindowPointer = (e: PointerEvent) => {
@@ -125,6 +144,7 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
   window.addEventListener("pointerup", onWindowPointer)
   window.addEventListener("pointercancel", onPointerCancel)
   canvas.addEventListener("pointerdown", onPointerDown)
+  canvas.addEventListener("lostpointercapture", onLostCapture)
   canvas.addEventListener("contextmenu", onContextMenu)
 
   return {
@@ -137,7 +157,7 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
         const len = Math.hypot(kx, ky)
         ax = kx / len
         ay = ky / len
-      } else if ((mouseButtons & 1) !== 0 && haveMouse) {
+      } else if ((mouseButtons & 1) !== 0 && haveMouse && performance.now() - lastPointerAt < MOUSE_STALE_MS) {
         const dx = mx - playerScreen.x
         const dy = my - playerScreen.y
         const dist = Math.hypot(dx, dy)
@@ -150,7 +170,8 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
         ax = virtual.ax
         ay = virtual.ay
       }
-      const pull = held(PULL) || (mouseButtons & 2) !== 0 || (virtual?.pull ?? false)
+      const mouseFresh = performance.now() - lastPointerAt < MOUSE_STALE_MS
+      const pull = held(PULL) || ((mouseButtons & 2) !== 0 && mouseFresh) || (virtual?.pull ?? false)
       return { ax, ay, pull }
     },
     setVirtual(v: Intent | null) {
@@ -165,6 +186,7 @@ export function createInput(canvas: HTMLCanvasElement, callbacks: InputCallbacks
       window.removeEventListener("pointerup", onWindowPointer)
       window.removeEventListener("pointercancel", onPointerCancel)
       canvas.removeEventListener("pointerdown", onPointerDown)
+      canvas.removeEventListener("lostpointercapture", onLostCapture)
       canvas.removeEventListener("contextmenu", onContextMenu)
     },
   }

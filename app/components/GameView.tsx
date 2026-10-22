@@ -116,7 +116,8 @@ export function GameView(props: GameViewProps) {
     setInput(ctl)
 
     let debug: GwDebug | null = null
-    if (window.location.search.includes("debug")) {
+    // Probe/QA hook only: an exact ?debug parameter, not any URL that happens to contain "debug".
+    if (new URLSearchParams(window.location.search).has("debug")) {
       debug = {
         world: () => world,
         autopilot: false,
@@ -168,7 +169,8 @@ export function GameView(props: GameViewProps) {
     const frame = (now: number) => {
       if (!running) return
       raf = requestAnimationFrame(frame)
-      const frameDt = Math.min((now - last) / 1000, CONFIG.maxFrameDt)
+      // Clamp both ends: the first rAF timestamp can predate start()'s performance.now().
+      const frameDt = Math.max(0, Math.min((now - last) / 1000, CONFIG.maxFrameDt))
       last = now
       if (debug) {
         if (lastFrameAt) pushSample(debug.perf.frameMs, now - lastFrameAt)
@@ -212,7 +214,8 @@ export function GameView(props: GameViewProps) {
           acc -= CONFIG.dt
           steps++
         }
-        if (steps >= CONFIG.maxStepsPerFrame) acc = 0
+        // Drop only a real backlog (a stall), not the remainder of a frame that used every step.
+        if (steps >= CONFIG.maxStepsPerFrame && acc >= CONFIG.dt) acc = 0
       }
       if (debug) pushSample(debug.perf.stepMs, performance.now() - t0)
 

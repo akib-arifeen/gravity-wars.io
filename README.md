@@ -52,4 +52,5 @@ BASE_PATH=/play/gravity-wars npm run build   # assets resolve under /play/gravit
   - `audio.ts` synthesises the sound with Web Audio. There are no audio files.
   - `input.ts` handles keyboard, mouse and touch.
 - `app/` is the React shell: the menu with an attract-mode round behind it, the HUD, pause and end screens, and the fixed-timestep loop.
-- The simulation is deterministic. A seed plus a sequence of inputs replays exactly the same round. Every body, player or bot, is driven only through an `Intent` (thrust vector plus pull). That gives a multiplayer seam: a networked version would feed remote players' intents into the same `step()` call.
+- The simulation is deterministic on a given JavaScript engine. A seed plus a sequence of inputs replays exactly the same round. Different browsers can differ in the last bit of `Math.exp` and `Math.pow`, so the same inputs can drift apart across engines.
+- Every body, player or bot, is driven only through an `Intent` (thrust vector plus pull). That is the seam for multiplayer: a networked version would feed remote players' intents into the same `step()` call. Because of the cross-engine drift, it should run that step on a server (or sync state between clients) rather than rely on lockstep across browsers.
