@@ -2490,3 +2490,42 @@ body {
 .gw-boss {
   z-index: 2;
 }
+
+/* Narrow phones: stack the HUD instead of overlapping it. The centre block owns the top strip
+   (level, clock, goal); a boss bar sits under it; the mass/energy panel drops below that. */
+@media (max-width: 519px) {
+  .gw-hud-leftcol {
+    top: calc(80px + env(safe-area-inset-top, 0px));
+  }
+
+  .gw-hud:has(.gw-boss) .gw-hud-leftcol {
+    top: calc(140px + env(safe-area-inset-top, 0px));
+  }
+
+  .gw-hud-tag {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+  }
+
+  .gw-hud-goal {
+    font-size: 11px;
+    max-width: 92vw;
+  }
+
+  /* Leave the top-right corner free for the touch layout's minimap. */
+  .gw-boss {
+    top: calc(74px + env(safe-area-inset-top, 0px));
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    transform: none;
+    width: calc(100vw - 150px);
+    max-width: none;
+  }
+
+  .gw-boss-name {
+    font-size: 10px;
+  }
+
+  .gw-boss-head {
+    font-size: 10px;
+  }
+}

@@ -419,7 +419,9 @@ export function GameView(props: GameViewProps) {
       if (relic && !relicCollected) {
         const p = w2s(f, relic.x, relic.y)
         const margin = 46
-        const onScreen = p.x > margin && p.x < f.width - margin && p.y > margin && p.y < f.height - margin
+        // On phones the top strip is a stacked HUD; keep the off-screen chevron below it.
+        const topMargin = f.width < 560 ? 190 : margin
+        const onScreen = p.x > margin && p.x < f.width - margin && p.y > topMargin && p.y < f.height - margin
         const pulse = mq("(prefers-reduced-motion: reduce)") ? 0.5 : 0.5 + 0.5 * Math.sin(t * 2.2)
         if (onScreen) {
           const size = 9 + pulse * 3
@@ -444,7 +446,7 @@ export function GameView(props: GameViewProps) {
           octx.restore()
         } else {
           const cx = Math.max(margin, Math.min(f.width - margin, p.x))
-          const cy = Math.max(margin, Math.min(f.height - margin, p.y))
+          const cy = Math.max(topMargin, Math.min(f.height - margin, p.y))
           const dx = p.x - cx
           const dy = p.y - cy
           const d = Math.hypot(dx, dy) || 1
