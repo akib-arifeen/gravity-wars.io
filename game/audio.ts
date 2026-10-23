@@ -5,7 +5,7 @@
 import { CONFIG } from "./config"
 import type { CosmicKind, GameEvent, PowerUpKind, World } from "./types"
 
-export type UiSound = "click" | "start" | "pause" | "achievement"
+export type UiSound = "click" | "start" | "pause" | "achievement" | "relic" | "boss"
 
 export interface Sfx {
   /**
@@ -713,6 +713,17 @@ export function createSfx(): Sfx {
         noise(0.2, 0.04, "highpass", 6000, 8000, 0.7, 0.26)
       } else if (kind === "start") {
         voice("triangle", 300, 900, 0.2, 0.12)
+      } else if (kind === "relic") {
+        // Rising fifth with a shimmer on the tail: the "found something" chime.
+        voice("triangle", 587.33, 587.33, 0.18, 0.12)
+        voice("triangle", 880, 880, 0.24, 0.12, 0.1)
+        voice("sine", 1760, 1760, 0.3, 0.05, 0.16)
+        noise(0.22, 0.035, "highpass", 7000, 9000, 0.7, 0.2)
+      } else if (kind === "boss") {
+        // Low swell under the telegraph ring: dread, not a jump scare.
+        voice("sawtooth", 55, 41, 0.9, 0.07, 0, 220)
+        voice("sine", 110, 82, 0.9, 0.06, 0.02)
+        noise(0.7, 0.03, "lowpass", 300, 120, 0.9, 0.05)
       } else {
         voice("sine", 660, 660, 0.09, 0.1)
         voice("sine", 440, 440, 0.12, 0.1, 0.1)

@@ -4,7 +4,8 @@ import { useEffect, useRef, type PointerEvent as RPointerEvent } from "react"
 import { CONFIG } from "@/game/config"
 import type { InputController } from "@/game/input"
 import type { HudSnapshot } from "@/game/types"
-import { AbilityIcon } from "./Icons"
+import type { AbilityId } from "@/game/campaign"
+import { AbilityIcon, LockIcon } from "./Icons"
 
 const KNOB_BASE = 56
 const DEADZONE = 0.12
@@ -13,6 +14,8 @@ interface Props {
   input: InputController
   hud?: HudSnapshot | null
   onGesture?: () => void
+  /** Campaign abilities not earned yet: the button shows a lock and cannot fire. */
+  lockedAbilities?: readonly AbilityId[]
 }
 
 /**
@@ -20,7 +23,7 @@ interface Props {
  * Joystick listeners sit on the parent stage so mouse clicks on a hybrid device still reach
  * the canvas; only non-mouse pointers are handled here.
  */
-export function TouchControls({ input, hud = null, onGesture }: Props) {
+export function TouchControls({ input, hud = null, onGesture, lockedAbilities = [] }: Props) {
   const layerRef = useRef<HTMLDivElement>(null)
   const baseRef = useRef<HTMLDivElement>(null)
   const knobRef = useRef<HTMLDivElement>(null)
@@ -167,6 +170,7 @@ export function TouchControls({ input, hud = null, onGesture }: Props) {
 
   const ab = CONFIG.abilities
   const energy = hud?.energy ?? 100
+  const isLocked = (kind: "dash" | "repulse" | "ult") => lockedAbilities.includes(kind)
   const press = (kind: "dash" | "repulse" | "ult") => (e: RPointerEvent) => {
     if (e.pointerType === "mouse") return
     e.preventDefault()
@@ -190,32 +194,37 @@ export function TouchControls({ input, hud = null, onGesture }: Props) {
       <div
         className="gw-abtn gw-abtn-dash"
         data-gw-ability="dash"
+        data-locked={isLocked("dash") ? "1" : undefined}
         data-low={energy < ab.dash.cost ? "1" : undefined}
-        style={{ ["--p" as string]: cd(hud?.dashCd, hud?.dashMax) }}
-        onPointerDown={press("dash")}
+        style={{ ["--p" as string]: isLocked("dash") ? 0 : cd(hud?.dashCd, hud?.dashMax) }}
+        onPointerDown={isLocked("dash") ? undefined : press("dash")}
       >
-        <AbilityIcon kind="dash" />
-        <span className="gw-abtn-label">DASH</span>
+        {isLocked("dash") ? <LockIcon size={18} /> : <AbilityIcon kind="dash" />}
+        <span className="gw-abtn-label">{isLocked("dash") ? "LOCK" : "DASH"}</span>
       </div>
       <div
         className="gw-abtn gw-abtn-repulse"
         data-gw-ability="repulse"
+        data-locked={isLocked("repulse") ? "1" : undefined}
         data-low={energy < ab.repulse.cost ? "1" : undefined}
-        style={{ ["--p" as string]: cd(hud?.repulseCd, hud?.repulseMax) }}
-        onPointerDown={press("repulse")}
+        style={{ ["--p" as string]: isLocked("repulse") ? 0 : cd(hud?.repulseCd, hud?.repulseMax) }}
+        onPointerDown={isLocked("repulse") ? undefined : press("repulse")}
       >
-        <AbilityIcon kind="repulse" />
-        <span className="gw-abtn-label">REPULSE</span>
+        {isLocked("repulse") ? <LockIcon size={18} /> : <AbilityIcon kind="repulse" />}
+        <span className="gw-abtn-label">{isLocked("repulse") ? "LOCK" : "REPULSE"}</span>
       </div>
       <div
         className="gw-abtn gw-abtn-ult"
         data-gw-ability="ult"
-        data-ready={ultReady || ultActive ? "1" : undefined}
-        style={{ ["--p" as string]: 100 - Math.min(100, ultCharge * 100) }}
-        onPointerDown={press("ult")}
+        data-locked={isLocked("ult") ? "1" : undefined}
+        data-ready={!isLocked("ult") && (ultReady || ultActive) ? "1" : undefined}
+        style={{ ["--p" as string]: isLocked("ult") ? 0 : 100 - Math.min(100, ultCharge * 100) }}
+        onPointerDown={isLocked("ult") ? undefined : press("ult")}
       >
-        <AbilityIcon kind="ult" />
-        <span className="gw-abtn-label">{ultActive ? `${Math.ceil(hud?.ultActive ?? 0)}s` : ultReady ? "READY" : "ULT"}</span>
+        {isLocked("ult") ? <LockIcon size={18} /> : <AbilityIcon kind="ult" />}
+        <span className="gw-abtn-label">
+          {isLocked("ult") ? "LOCK" : ultActive ? `${Math.ceil(hud?.ultActive ?? 0)}s` : ultReady ? "READY" : "ULT"}
+        </span>
       </div>
     </div>
   )

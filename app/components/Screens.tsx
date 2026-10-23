@@ -3,8 +3,24 @@
 import { useEffect, useRef, useState } from "react"
 import type { AchievementDef } from "@/game/achievements"
 import { ARENAS, ARENA_IDS } from "@/game/arenas"
+import {
+  ABILITY_UNLOCKS,
+  CAMPAIGN_LEVELS,
+  MAX_CAMPAIGN_STARS,
+  isUnlocked,
+  isWon,
+  sectorOf,
+  starsOf,
+  totalStars,
+  type AbilityId,
+  type AbilityUnlock,
+  type CampaignLevel,
+  type CampaignProgress,
+} from "@/game/campaign"
+import type { DailyConfig } from "@/game/daily"
 import { CONFIG } from "@/game/config"
 import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, RoundResult } from "@/game/types"
+import { AbilityIcon, LockIcon, StarIcon } from "./Icons"
 
 const BEST_KEY = "gw:best:v1"
 
@@ -14,10 +30,44 @@ export const DIFFICULTIES: { id: Difficulty; label: string; sub: string; endless
   { id: "hard", label: "Hard", sub: "7 sharp rivals", endlessSub: "sharp from the start" },
 ]
 
-export const MODES: { id: GameMode; label: string; copy: string }[] = [
+/** The mode the menu offers: the two engine modes plus the campaign and the daily challenge. */
+export type MenuMode = GameMode | "campaign" | "daily"
+
+export const MODES: { id: MenuMode; label: string; copy: string }[] = [
   { id: "endless", label: "Endless", copy: "Endless \u2014 the arena never sleeps. Climb the leaderboard." },
   { id: "round", label: "Round", copy: `3 minute match. Reach ${CONFIG.round.criticalMass} mass or be the last one left.` },
+  { id: "campaign", label: "Campaign", copy: "The Long Fall \u2014 twelve levels down three sectors, three bosses, one way out." },
+  { id: "daily", label: "Daily", copy: "One seeded arena for everyone, today only. Your score is the peak mass of a single run." },
 ]
+
+/** Everything the daily panel needs about today and the player's record. */
+export interface DailyView {
+  config: DailyConfig
+  best: number
+  streak: number
+  runs: number
+}
+
+/** The campaign summary the end screen shows for a finished level. */
+export interface CampaignOutcome {
+  level: CampaignLevel
+  goalMet: boolean
+  bonusMet: boolean
+  stars: number
+  relicFound: boolean
+  newBest: boolean
+  unlocked: AbilityUnlock[]
+  next: CampaignLevel | null
+}
+
+/** The daily summary the end screen shows for a finished daily run. */
+export interface DailyOutcome {
+  key: string
+  score: number
+  best: number
+  isBest: boolean
+  streak: number
+}
 
 export type ArenaChoice = ArenaId | "random"
 export const ARENA_CHOICES: ArenaChoice[] = ["random", ...ARENA_IDS]
@@ -93,6 +143,19 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
   )
 }
 
+/** Three stars, filled up to `n`. */
+function Stars({ n, size = 14 }: { n: number; size?: number }) {
+  return (
+    <span className="gw-stars" aria-label={`${n} of 3 stars`}>
+      {[1, 2, 3].map((i) => (
+        <span key={i} className={i <= n ? "gw-star-on" : "gw-star-off"}>
+          <StarIcon size={size} filled={i <= n} />
+        </span>
+      ))}
+    </span>
+  )
+}
+
 // ---------------------------------------------------------------------------------------------
 
 interface MenuProps {
@@ -105,14 +168,38 @@ interface MenuProps {
   arena: ArenaChoice
   onArena(a: ArenaChoice): void
   onStats(): void
-  mode: GameMode
-  onMode(m: GameMode): void
+  mode: MenuMode
+  onMode(m: MenuMode): void
   endlessBest: number
+  /** Campaign: the selected level and the levels whose goal is already met. */
+  campaignLevel: CampaignLevel
+  onCampaignLevel(l: CampaignLevel): void
+  campaignProgress: CampaignProgress
+  /** Today's daily challenge and the local record for it. */
+  daily: DailyView | null
   /** False while another panel (stats) is open on top: the menu keys then do nothing. */
   active?: boolean
 }
 
-export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMute, layout, arena, onArena, onStats, mode, onMode, endlessBest, active = true }: MenuProps) {
+export function MenuScreen({
+  difficulty,
+  onDifficulty,
+  onPlay,
+  muted,
+  onToggleMute,
+  layout,
+  arena,
+  onArena,
+  onStats,
+  mode,
+  onMode,
+  endlessBest,
+  campaignLevel,
+  onCampaignLevel,
+  campaignProgress,
+  daily,
+  active = true,
+}: MenuProps) {
   const [best, setBest] = useState<BestMap>({})
   const playRef = useRef<HTMLButtonElement>(null)
   const diffRef = useRef(difficulty)
@@ -121,6 +208,8 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
   onDiffRef.current = onDifficulty
   const arenaRef = useRef(arena)
   arenaRef.current = arena
+  const modeRef = useRef(mode)
+  modeRef.current = mode
   const activeRef = useRef(active)
   activeRef.current = active
   const onArenaRef = useRef(onArena)
@@ -134,6 +223,8 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!activeRef.current || e.ctrlKey || e.metaKey || e.altKey) return
+      // In the campaign and the daily the arena and the difficulty are fixed, so those keys do nothing.
+      if (modeRef.current === "campaign" || modeRef.current === "daily") return
       const i = DIFFICULTIES.findIndex((d) => d.id === diffRef.current)
       let next = -1
       if (e.code === "ArrowUp" || e.code === "ArrowDown") {
@@ -164,6 +255,24 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
     ? "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
     : "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
 
+  const stars = totalStars(campaignProgress)
+  const relics = campaignProgress.relics.length
+  const sector = sectorOf(campaignLevel)
+  const meta =
+    mode === "campaign"
+      ? bestLineCampaign(stars, relics)
+      : mode === "daily"
+        ? daily && daily.best > 0
+          ? `Best today: ${daily.best} mass · ${daily.streak}-day streak`
+          : "No run today yet"
+        : mode === "endless"
+          ? endlessBest > 0
+            ? `Endless best: mass ${endlessBest}`
+            : "No Endless sessions yet"
+          : b
+            ? `Best on ${difficulty}: ${b.wins} ${b.wins === 1 ? "win" : "wins"}, peak mass ${b.bestMass}`
+            : `No ${difficulty} rounds yet`
+
   return (
     <div className="gw-overlay gw-overlay-menu">
       <div className="gw-panel gw-menu" role="dialog" aria-label="Gravity Wars menu">
@@ -187,45 +296,129 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
         </div>
         <p className="gw-mode-copy">{MODES.find((m) => m.id === mode)?.copy}</p>
 
-        <div className="gw-arena-label">{mode === "endless" ? "Starting skill" : "Difficulty"}</div>
-        <div className="gw-seg" role="radiogroup" aria-label="Difficulty">
-          {DIFFICULTIES.map((d) => (
-            <button
-              key={d.id}
-              type="button"
-              role="radio"
-              aria-checked={d.id === difficulty}
-              className="gw-seg-btn"
-              data-on={d.id === difficulty ? "1" : undefined}
-              onClick={() => onDifficulty(d.id)}
-            >
-              <span className="gw-seg-name">{d.label}</span>
-              <span className="gw-seg-sub">{mode === "endless" ? d.endlessSub : d.sub}</span>
-            </button>
-          ))}
-        </div>
+        {mode === "campaign" ? (
+          <>
+            <div className="gw-arena-label">
+              Sector {["I", "II", "III"][sector.id - 1]} &middot; {sector.name}
+            </div>
+            <div className="gw-levels" role="radiogroup" aria-label="Campaign level">
+              {CAMPAIGN_LEVELS.map((l) => {
+                const unlocked = isUnlocked(campaignProgress, l)
+                const won = isWon(campaignProgress, l)
+                const lStars = starsOf(campaignProgress, l)
+                return (
+                  <button
+                    key={l.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={l.id === campaignLevel.id}
+                    aria-label={`Level ${l.index}: ${l.name}${unlocked ? `, ${lStars} of 3 stars` : ", locked"}`}
+                    className="gw-level-btn"
+                    data-on={l.id === campaignLevel.id ? "1" : undefined}
+                    data-won={won ? "1" : undefined}
+                    data-boss={l.boss !== null ? "1" : undefined}
+                    data-sector={l.sector}
+                    disabled={!unlocked}
+                    onClick={() => onCampaignLevel(l)}
+                  >
+                    <span className="gw-level-no">{l.index}</span>
+                    <span className="gw-level-name">{l.name}</span>
+                    {unlocked ? <Stars n={lStars} size={9} /> : <LockIcon size={11} />}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="gw-goal-box">
+              <p className="gw-goal-line">Goal: {campaignLevel.goal.line}</p>
+              <p className="gw-bonus-line">Bonus star: {campaignLevel.bonus.line}</p>
+              <p className="gw-arena-blurb">{campaignLevel.brief}</p>
+            </div>
+            <div className="gw-ability-track" aria-label="Abilities unlocked by campaign stars">
+              {ABILITY_UNLOCKS.map((a) => {
+                const on = stars >= a.stars
+                return (
+                  <span
+                    key={a.id}
+                    className={`gw-ability-chip${on ? " gw-ability-on" : ""}`}
+                    title={on ? `${a.name} unlocked` : `${a.name} at ${a.stars} stars`}
+                  >
+                    <AbilityIcon kind={a.id} size={16} />
+                    <span className="gw-ability-name">{a.name}</span>
+                    {!on && <span className="gw-ability-req">{a.stars} {a.stars === 1 ? "star" : "stars"}</span>}
+                  </span>
+                )
+              })}
+            </div>
+          </>
+        ) : mode === "daily" ? (
+          <>
+            <div className="gw-daily-card">
+              <div className="gw-daily-head">
+                <span className="gw-daily-date">{daily?.config.key ?? "-"}</span>
+                <span className="gw-daily-arena">
+                  {daily ? `${ARENAS[daily.config.arena].name} · ${daily.config.difficulty}` : ""}
+                </span>
+              </div>
+              <p className="gw-daily-line">
+                A seeded arena: everyone plays the same field today. Your score is the peak mass of one round.
+              </p>
+              <div className="gw-daily-stats">
+                <span>
+                  <strong>{daily?.best ? `${daily.best}` : "-"}</strong> today&apos;s best
+                </span>
+                <span>
+                  <strong>{daily?.streak ?? 0}</strong> day streak
+                </span>
+                <span>
+                  <strong>{daily?.runs ?? 0}</strong> runs
+                </span>
+              </div>
+              <p className="gw-daily-seed">Seed {daily ? daily.config.seed : "-"}</p>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="gw-arena-label">{mode === "endless" ? "Starting skill" : "Difficulty"}</div>
+            <div className="gw-seg" role="radiogroup" aria-label="Difficulty">
+              {DIFFICULTIES.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={d.id === difficulty}
+                  className="gw-seg-btn"
+                  data-on={d.id === difficulty ? "1" : undefined}
+                  onClick={() => onDifficulty(d.id)}
+                >
+                  <span className="gw-seg-name">{d.label}</span>
+                  <span className="gw-seg-sub">{mode === "endless" ? d.endlessSub : d.sub}</span>
+                </button>
+              ))}
+            </div>
 
-        <div className="gw-arena-label">Arena</div>
-        <div className="gw-arenas" role="radiogroup" aria-label="Arena">
-          {ARENA_CHOICES.map((a) => (
-            <button
-              key={a}
-              type="button"
-              role="radio"
-              aria-checked={a === arena}
-              className="gw-arena-btn"
-              data-on={a === arena ? "1" : undefined}
-              onClick={() => onArena(a)}
-            >
-              {a === "random" ? "Random" : ARENAS[a].name}
-            </button>
-          ))}
-        </div>
-        <p className="gw-arena-blurb">{arena === "random" ? "A different arena every round." : ARENAS[arena].blurb}</p>
+            <div className="gw-arena-label">Arena</div>
+            <div className="gw-arenas" role="radiogroup" aria-label="Arena">
+              {ARENA_CHOICES.map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  role="radio"
+                  aria-checked={a === arena}
+                  className="gw-arena-btn"
+                  data-on={a === arena ? "1" : undefined}
+                  onClick={() => onArena(a)}
+                >
+                  {a === "random" ? "Random" : ARENAS[a].name}
+                </button>
+              ))}
+            </div>
+            <p className="gw-arena-blurb">{arena === "random" ? "A different arena every round." : ARENAS[arena].blurb}</p>
+          </>
+        )}
 
         <div className="gw-sticky">
           <button ref={playRef} type="button" className="gw-btn gw-btn-primary gw-btn-wide" onClick={onPlay}>
-            Play
+            {mode === "campaign" ? `Play level ${campaignLevel.index}` : mode === "daily" ? "Play today's challenge" : "Play"}
             <span className="gw-key">Enter</span>
           </button>
         </div>
@@ -236,6 +429,18 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
               <li>Eat debris and smaller rivals to climb the leaderboard.</li>
               <li>Get absorbed and you respawn in a few seconds. Rivals come and go.</li>
               <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
+            </>
+          ) : mode === "campaign" ? (
+            <>
+              <li>Each level has a goal, a bonus star and a hidden relic: three stars per level.</li>
+              <li>Stars unlock Dash, Repulse and the Singularity inside the campaign.</li>
+              <li>Three bosses wait at the end of the three sectors. Kill all of them.</li>
+            </>
+          ) : mode === "daily" ? (
+            <>
+              <li>Everyone gets the same seeded arena, rivals and cosmic events today.</li>
+              <li>One round, three minutes. Your score is your peak mass.</li>
+              <li>Come back tomorrow for a new arena and seed.</li>
             </>
           ) : (
             <>
@@ -251,13 +456,7 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
           <button type="button" className="gw-btn gw-btn-ghost gw-btn-small" onClick={onStats}>
             Stats &amp; achievements
           </button>
-          <span className="gw-best">
-            {mode === "endless"
-              ? endlessBest > 0
-                ? `Endless best: mass ${endlessBest}`
-                : "No Endless sessions yet"
-              : b ? `Best on ${difficulty}: ${b.wins} ${b.wins === 1 ? "win" : "wins"}, peak mass ${b.bestMass}` : `No ${difficulty} rounds yet`}
-          </span>
+          <span className="gw-best">{meta}</span>
           <button
             type="button"
             className="gw-btn gw-btn-ghost gw-btn-small"
@@ -271,6 +470,12 @@ export function MenuScreen({ difficulty, onDifficulty, onPlay, muted, onToggleMu
       </div>
     </div>
   )
+}
+
+function bestLineCampaign(stars: number, relics: number): string {
+  const parts = [`${stars} / ${MAX_CAMPAIGN_STARS} stars`, `${relics} / ${CAMPAIGN_LEVELS.length} relics`]
+  if (stars >= MAX_CAMPAIGN_STARS) parts.push("The Long Fall complete")
+  return parts.join(" · ")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -317,6 +522,14 @@ interface EndProps {
   onPlayAgain(): void
   onQuit(): void
   unlocked: AchievementDef[]
+  /** Campaign only: the level result, stars, bonus, relic and any ability unlock. */
+  campaign?: CampaignOutcome
+  /** Campaign only: start the next level. */
+  onNextLevel?(): void
+  /** Daily only: the run's score and the local record. */
+  daily?: DailyOutcome
+  /** Share the result (Web Share / clipboard). */
+  onShare?(): void
 }
 
 function reasonLine(r: RoundResult): string {
@@ -334,12 +547,15 @@ function reasonLine(r: RoundResult): string {
   return "Round over"
 }
 
-export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked }: EndProps) {
+export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked, campaign, onNextLevel, daily, onShare }: EndProps) {
   const ref = useRef<HTMLButtonElement>(null)
+  const shareRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     ref.current?.focus({ preventScroll: true })
   }, [])
   const won = result.playerWon
+  const met = campaign ? campaign.goalMet : won
+  const nextAvailable = campaign !== undefined && campaign.goalMet && campaign.next !== null
   const player = result.standings.find((s) => s.id === "player")
   const cells: [string, string][] = [
     ["Final mass", String(Math.round(player?.mass ?? 0))],
@@ -352,11 +568,80 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked }: EndP
     ["Assists", String(stats.assists)],
     ["Pickups", String(stats.pickups)],
   ]
+  const headline = campaign ? (campaign.goalMet ? "GOAL MET" : "GOAL MISSED") : daily ? (daily.isBest ? "NEW DAILY BEST" : "DAILY RUN") : won ? "VICTORY" : "DEFEAT"
+  const label = campaign ? (campaign.goalMet ? "Goal met" : "Goal missed") : daily ? "Daily run" : won ? "Victory" : "Defeat"
   return (
     <div className="gw-overlay">
-      <div className="gw-panel gw-end" role="dialog" aria-modal="true" aria-label={won ? "Victory" : "Defeat"}>
-        <h2 className={`gw-headline ${won ? "gw-win" : "gw-lose"}`}>{won ? "VICTORY" : "DEFEAT"}</h2>
-        <p className="gw-reason">{reasonLine(result)}</p>
+      <div className="gw-panel gw-end" role="dialog" aria-modal="true" aria-label={label}>
+        <h2 className={`gw-headline ${met ? "gw-win" : "gw-lose"}`}>{headline}</h2>
+
+        {campaign && (
+          <>
+            <div className="gw-end-stars">
+              <Stars n={campaign.stars} size={30} />
+              <span className="gw-end-level">
+                Level {campaign.level.index} · {campaign.level.name}
+              </span>
+            </div>
+            <p className="gw-goal-line">Goal: {campaign.level.goal.line}</p>
+            <ul className="gw-checklist">
+              <li data-on={campaign.goalMet ? "1" : undefined}>
+                {campaign.goalMet ? "Goal complete: " : "Goal not met: "}{campaign.level.goal.line}
+              </li>
+              <li data-on={campaign.bonusMet ? "1" : undefined}>
+                {campaign.bonusMet ? "Bonus star: " : "No bonus star: "}{campaign.level.bonus.line}
+              </li>
+              <li data-on={campaign.relicFound ? "1" : undefined}>
+                {campaign.relicFound ? "Relic recovered: " : "Relic not found: "}a hidden fragment of the old signal
+              </li>
+            </ul>
+            {campaign.newBest && <p className="gw-new-best">New best for this level</p>}
+            {campaign.unlocked.length > 0 && (
+              <div className="gw-unlock" role="status">
+                <div className="gw-unlock-kicker">Ability unlocked</div>
+                {campaign.unlocked.map((a) => (
+                  <div key={a.id} className="gw-unlock-row">
+                    <span className="gw-unlock-icon">
+                      <AbilityIcon kind={a.id} size={26} />
+                    </span>
+                    <span>
+                      <strong>{a.name}</strong>
+                      <span className="gw-unlock-desc">{a.description}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {daily && (
+          <div className="gw-daily-result">
+            <div className="gw-daily-score">
+              <span className="gw-daily-score-value">{daily.score}</span>
+              <span className="gw-daily-score-label">peak mass</span>
+            </div>
+            <div className="gw-daily-stats">
+              <span>
+                <strong>{daily.best}</strong> best today
+              </span>
+              <span>
+                <strong>{daily.streak}</strong> day streak
+              </span>
+            </div>
+            <p className="gw-daily-seed">{daily.key}</p>
+          </div>
+        )}
+
+        {!campaign && !daily && <p className="gw-reason">{reasonLine(result)}</p>}
+        {campaign && !campaign.goalMet && <p className="gw-reason">{reasonLine(result)}</p>}
+
+        {onShare && (
+          <button type="button" className="gw-btn gw-btn-ghost gw-btn-wide gw-share-btn" onClick={onShare}>
+            Share result
+            <span className="gw-key">S</span>
+          </button>
+        )}
 
         <dl className="gw-stats">
           {cells.map(([k, v]) => (
@@ -393,12 +678,19 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked }: EndP
         </ol>
 
         <div className="gw-end-actions gw-sticky">
-          <button ref={ref} type="button" className="gw-btn gw-btn-primary" onClick={onPlayAgain}>
-            Play again
-            <span className="gw-key">Enter</span>
-          </button>
-          <button type="button" className="gw-btn gw-btn-ghost" onClick={onQuit}>
-            Change difficulty
+          {nextAvailable ? (
+            <button ref={ref} type="button" className="gw-btn gw-btn-primary" onClick={onNextLevel}>
+              Next level
+              <span className="gw-key">Enter</span>
+            </button>
+          ) : (
+            <button ref={ref} type="button" className="gw-btn gw-btn-primary" onClick={onPlayAgain}>
+              {campaign ? "Retry level" : daily ? "Replay today" : "Play again"}
+              <span className="gw-key">Enter</span>
+            </button>
+          )}
+          <button type="button" className={nextAvailable ? "gw-btn" : "gw-btn gw-btn-ghost"} onClick={onQuit}>
+            {campaign || daily ? "Menu" : "Change difficulty"}
             <span className="gw-key">Q</span>
           </button>
         </div>

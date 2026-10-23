@@ -24,6 +24,20 @@ export interface RenderView {
   demo?: boolean
 }
 
+/** The last frame's camera transform, so a shell-owned overlay can draw in world coordinates. */
+export interface RenderFrame {
+  camX: number
+  camY: number
+  zoom: number
+  /** Screen-shake offset in CSS px. */
+  shakeX: number
+  shakeY: number
+  /** Canvas size in CSS px. */
+  width: number
+  height: number
+  dpr: number
+}
+
 export interface Renderer {
   /**
    * Draw one frame. alpha in [0, 1] interpolates every body and debris between (px, py) and
@@ -39,6 +53,8 @@ export interface Renderer {
   screenToWorld(sx: number, sy: number): Vec
   /** Where the player was drawn last frame, in CSS pixels. */
   playerScreen(): Vec
+  /** The last frame's camera transform (for a shell overlay canvas). */
+  frame(): RenderFrame
   /** Reset camera, particles and effects (call when a new world starts). */
   reset(world: World): void
   dispose(): void
@@ -145,6 +161,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       resize() {},
       screenToWorld: () => none,
       playerScreen: () => none,
+      frame: () => ({ camX: 0, camY: 0, zoom: 1, shakeX: 0, shakeY: 0, width: W, height: H, dpr }),
       reset() {},
       dispose() {},
     }
@@ -2299,20 +2316,42 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
 
     // camera
     if (player) {
+      // Dead in Endless: the arena keeps living, so the camera follows the current leader instead
+      // of parking on the corpse. In a round the game is over, so the camera stays where it was.
+      let followIdx = 0
+      let followingPlayer = true
+      if (!player.alive && world.mode === "endless") {
+        let best = -1
+        for (let i = 1; i < n; i++) {
+          if (!bs[i].alive) continue
+          if (best < 0 || bs[i].mass > bs[best].mass) best = i
+        }
+        if (best >= 0) {
+          followIdx = best
+          followingPlayer = false
+        }
+      }
       let tx = camX
       let ty = camY
       let zt: number
-      if (player.alive) {
+      if (followingPlayer) {
         tx = ppx + player.vx * 0.18
         ty = ppy + player.vy * 0.18
         if (demo) {
           tx *= 0.65
           ty *= 0.65
         }
-        aliveZoomTarget = zoomTargetFor(world, player)
-        zt = aliveZoomTarget
+        if (player.alive) {
+          aliveZoomTarget = zoomTargetFor(world, player)
+          zt = aliveZoomTarget
+        } else {
+          zt = aliveZoomTarget * 0.8
+        }
       } else {
-        zt = aliveZoomTarget * 0.8
+        const follower = bs[followIdx]
+        tx = bx[followIdx] + follower.vx * 0.12
+        ty = by[followIdx] + follower.vy * 0.12
+        zt = Math.max(0.32, aliveZoomTarget * 0.85)
       }
       const kp = 1 - Math.exp(-6 * dt)
       const kz = 1 - Math.exp(-3 * dt)
@@ -2577,6 +2616,9 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     },
     playerScreen(): Vec {
       return { x: playerSx, y: playerSy }
+    },
+    frame(): RenderFrame {
+      return { camX, camY, zoom, shakeX: shx, shakeY: shy, width: W, height: H, dpr }
     },
     reset,
     dispose,

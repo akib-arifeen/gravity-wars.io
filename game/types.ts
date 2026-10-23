@@ -329,6 +329,11 @@ export interface World {
   time: number
   /** Seconds until time-up (CONFIG.round.duration at start). */
   timeLeft: number
+  /**
+   * Mass at which a living body wins the round by critical mass (CONFIG.round.criticalMass by
+   * default). Campaign levels set it out of reach so a long level cannot be cut short by the race.
+   */
+  roundCriticalMass: number
   /** Current arena wall radius (shrinks during escalation). */
   arenaRadius: number
   arena: ArenaId

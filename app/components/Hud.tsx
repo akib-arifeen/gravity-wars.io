@@ -3,12 +3,24 @@
 import { useEffect, useRef, useState } from "react"
 import { CONFIG } from "@/game/config"
 import { ARENAS } from "@/game/arenas"
+import { BOSS_SPECIAL_LABEL, type BossHud } from "@/game/boss"
 import { COSMIC_INFO } from "@/game/cosmic"
-import type { HudSnapshot, LeaderboardEntry } from "@/game/types"
-import { AbilityIcon, WallIcon } from "./Icons"
+import { FEED_MAX, type FeedItem, type FeedView } from "@/game/feed"
+import type { AbilityId } from "@/game/campaign"
+import { AbilityIcon, LockIcon, WallIcon } from "./Icons"
+
+/** Campaign context the HUD shows: the level badge and its goal. */
+export interface CampaignHud {
+  index: number
+  total: number
+  name: string
+  goalLine: string
+  /** Seconds allowed for the level (the level's custom clock). */
+  timeLimit: number
+}
 
 interface HudProps {
-  hud: HudSnapshot | null
+  hud: FeedView | null
   muted: boolean
   onPause(): void
   onToggleMute(): void
@@ -19,6 +31,12 @@ interface HudProps {
   onPress(kind: "dash" | "repulse" | "ult"): void
   /** Endless: why the player died, for the respawn overlay. */
   deathText?: string
+  /** The boss encounter's bar, or null. */
+  boss?: BossHud | null
+  /** Campaign only: level name, goal and clock. */
+  campaign?: CampaignHud | null
+  /** Campaign abilities not earned yet: shown locked instead of pressable. */
+  lockedAbilities?: readonly AbilityId[]
 }
 
 function formatTime(s: number): string {
@@ -56,7 +74,7 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
   )
 }
 
-export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress, deathText = "" }: HudProps) {
+export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress, deathText = "", boss = null, campaign = null, lockedAbilities = [] }: HudProps) {
   const [showGo, setShowGo] = useState(false)
   const [wallBanner, setWallBanner] = useState(false)
   const [lbOpen, setLbOpen] = useState(false)
@@ -137,13 +155,37 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const ab = CONFIG.abilities
   const ultActive = hud ? hud.ultActive > 0 : false
   const ultReady = hud ? hud.ult >= 1 && !ultActive : false
-  const slots: { kind: "dash" | "repulse" | "ult"; label: string; key: string; pct: number; low: boolean }[] = hud
+  const slots: { kind: "dash" | "repulse" | "ult"; label: string; key: string; pct: number; low: boolean; locked: boolean }[] = hud
     ? [
-        { kind: "dash", label: "Dash", key: "Shift", pct: hud.dashMax > 0 ? (hud.dashCd / hud.dashMax) * 100 : 0, low: hud.energy < ab.dash.cost },
-        { kind: "repulse", label: "Repulse", key: "E", pct: hud.repulseMax > 0 ? (hud.repulseCd / hud.repulseMax) * 100 : 0, low: hud.energy < ab.repulse.cost },
-        { kind: "ult", label: "Singularity", key: "Q", pct: 100 - Math.min(100, hud.ult * 100), low: false },
+        {
+          kind: "dash",
+          label: "Dash",
+          key: "Shift",
+          pct: hud.dashMax > 0 ? (hud.dashCd / hud.dashMax) * 100 : 0,
+          low: hud.energy < ab.dash.cost,
+          locked: lockedAbilities.includes("dash"),
+        },
+        {
+          kind: "repulse",
+          label: "Repulse",
+          key: "E",
+          pct: hud.repulseMax > 0 ? (hud.repulseCd / hud.repulseMax) * 100 : 0,
+          low: hud.energy < ab.repulse.cost,
+          locked: lockedAbilities.includes("repulse"),
+        },
+        {
+          kind: "ult",
+          label: "Singularity",
+          key: "Q",
+          pct: 100 - Math.min(100, hud.ult * 100),
+          low: false,
+          locked: lockedAbilities.includes("ult"),
+        },
       ]
     : []
+
+  const feed = hud?.feed ?? null
+  const bossActive = boss !== null && hud?.phase !== "over"
 
   return (
     <div className="gw-hud" inert={inert}>
@@ -151,16 +193,18 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
         <>
           <div className="gw-hud-leftcol">
             <div className="gw-hud-panel gw-hud-left">
-              <div className="gw-hud-label">{ed ? "SCORE" : "MASS"}</div>
+              <div className="gw-hud-label">{ed ? "SCORE" : campaign ? "MASS / GOAL" : "MASS"}</div>
               <div className="gw-hud-mass">
                 <span className="gw-hud-mass-value">{Math.round(hud.mass)}</span>
-                {!ed && <span className="gw-hud-mass-max"> / {hud.criticalMass}</span>}
+                {!ed && !campaign && <span className="gw-hud-mass-max"> / {hud.criticalMass}</span>}
                 {ed && <span className="gw-hud-mass-max"> best {Math.round(Math.max(ed.best, hud.mass))}</span>}
               </div>
               {ed ? (
                 <div className="gw-hud-kd">
                   Kills {ed.kills} &middot; Deaths {ed.deaths}
                 </div>
+              ) : campaign ? (
+                <div className="gw-hud-kd">Rank {hud.rank > 0 ? `#${hud.rank}` : "-"} of {hud.alive}</div>
               ) : (
                 <div className="gw-bar gw-bar-thin" role="presentation">
                   <div className="gw-bar-fill gw-bar-mass" style={{ width: `${massPct}%` }} />
@@ -217,18 +261,31 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                   </button>
                 )}
               </>
+            ) : campaign ? (
+              <>
+                <div className="gw-hud-tag">
+                  LEVEL {campaign.index} / {campaign.total} &middot; {campaign.name.toUpperCase()}
+                </div>
+                <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{formatTime(hud.timeLeft)}</div>
+              </>
             ) : (
               <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{formatTime(hud.timeLeft)}</div>
             )}
-            <div className={`gw-hud-rank${ed ? " gw-hud-rank-ed" : ""}`}>
-              {hud.rank > 0 ? `Rank ${hud.rank} / ${hud.alive}` : "Eliminated"}
-              {escalating && !wallBanner && (
-                <span className="gw-wall-icon" role="img" aria-label="The wall is closing" title="The wall is closing">
-                  <WallIcon />
-                </span>
-              )}
-            </div>
+            {campaign ? (
+              <div className="gw-hud-goal">{campaign.goalLine}</div>
+            ) : (
+              <div className={`gw-hud-rank${ed ? " gw-hud-rank-ed" : ""}`}>
+                {ed ? (hud.rank > 0 ? `Rank ${hud.rank} / ${hud.alive}` : "Eliminated") : `Rank ${hud.rank} / ${hud.alive}`}
+                {escalating && !wallBanner && (
+                  <span className="gw-wall-icon" role="img" aria-label="The wall is closing" title="The wall is closing">
+                    <WallIcon />
+                  </span>
+                )}
+              </div>
+            )}
           </div>
+
+          {bossActive && boss && <BossBar boss={boss} />}
 
           {ed && hud.leaderboard.length > 0 && (
             <Leaderboard rows={hud.leaderboard} touch={layout === "touch"} open={lbOpen} onToggle={() => setLbOpen((o) => !o)} />
@@ -237,6 +294,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
           {ed && hud.leaderboard.length > 0 && layout === "touch" && (
             <Leaderboard rows={hud.leaderboard} touch open={lbOpen} drop onToggle={() => setLbOpen((o) => !o)} />
           )}
+
+          {feed && feed.length > 0 && <Feed items={feed} layout={layout} />}
 
           {wallBanner && (
             <div className="gw-wall-banner" role="status">
@@ -251,15 +310,19 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                   key={sl.kind}
                   type="button"
                   className="gw-slot"
-                  aria-label={`${sl.label} (${sl.key})`}
+                  aria-label={sl.locked ? `${sl.label} (locked: earn campaign stars to unlock)` : `${sl.label} (${sl.key})`}
+                  disabled={sl.locked}
+                  data-locked={sl.locked ? "1" : undefined}
                   data-low={sl.low ? "1" : undefined}
                   data-ready={sl.kind === "ult" && (ultReady || ultActive) ? "1" : undefined}
                   style={{ ["--p" as string]: sl.pct }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPress(sl.kind)}
                 >
-                  <AbilityIcon kind={sl.kind} />
-                  <span className="gw-slot-key">{sl.kind === "ult" ? (ultActive ? `${Math.ceil(hud.ultActive)}s` : ultReady ? "READY" : sl.key) : sl.key}</span>
+                  {sl.locked ? <LockIcon size={20} /> : <AbilityIcon kind={sl.kind} />}
+                  <span className="gw-slot-key">
+                    {sl.locked ? "LOCK" : sl.kind === "ult" ? (ultActive ? `${Math.ceil(hud.ultActive)}s` : ultReady ? "READY" : sl.key) : sl.key}
+                  </span>
                 </button>
               ))}
             </div>
@@ -306,11 +369,12 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
 
       {hud && hud.phase === "countdown" && (
         <div className="gw-countdown">
-          <div className="gw-countdown-arena">{ARENAS[hud.arena].name}</div>
+          <div className="gw-countdown-arena">{campaign ? `LEVEL ${campaign.index} · ${campaign.name}` : ARENAS[hud.arena].name}</div>
+          {campaign && <div className="gw-countdown-hint">{campaign.goalLine}</div>}
           <div key={countdownLabel} className="gw-countdown-num">
             {countdownLabel}
           </div>
-          <div className="gw-countdown-hint">Green ring = you can absorb it. Red ring = it can absorb you.</div>
+          {!campaign && <div className="gw-countdown-hint">Green ring = you can absorb it. Red ring = it can absorb you.</div>}
         </div>
       )}
       {hud && hud.phase !== "countdown" && showGo && (
@@ -322,6 +386,50 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   )
 }
 
+/** The boss bar: name, mass, and the telegraph stage in words. */
+function BossBar({ boss }: { boss: BossHud }) {
+  const telegraph = boss.phase === "telegraph" || boss.phase === "attack"
+  const label = boss.special ? BOSS_SPECIAL_LABEL[boss.special] : ""
+  const phaseText =
+    boss.phase === "telegraph"
+      ? `${label} INCOMING`
+      : boss.phase === "attack"
+        ? label === "GRAVITY MAW"
+          ? "GRAVITY MAW ACTIVE"
+          : label === "COLLAPSE"
+            ? "COLLAPSE ACTIVE"
+            : "LUNGE"
+        : boss.splitDone
+          ? "WOUNDED"
+          : "HUNTING"
+  return (
+    <div className={`gw-boss${telegraph ? " gw-boss-warn" : ""}`} role="status" aria-live="polite">
+      <div className="gw-boss-head">
+        <span className="gw-boss-name">{boss.name}</span>
+        <span className="gw-boss-mass">{Math.round(boss.mass)} mass</span>
+      </div>
+      <div className="gw-boss-bar" role="presentation">
+        <div className="gw-boss-fill" style={{ width: `${Math.max(0, boss.healthPct * 100)}%` }} />
+      </div>
+      <div className="gw-boss-phase">{phaseText}</div>
+    </div>
+  )
+}
+
+/** The activity feed: what just happened in the arena, newest last. */
+function Feed({ items, layout }: { items: FeedItem[]; layout: "desktop" | "touch" }) {
+  const shown = layout === "touch" ? items.slice(-3) : items.slice(-FEED_MAX)
+  return (
+    <div className={`gw-feed gw-feed-${layout}`} aria-live="off" aria-label="Arena activity">
+      {shown.map((f) => (
+        <div key={f.id} className={`gw-feed-line gw-feed-${f.tone}`}>
+          {f.text}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Leaderboard({
   rows,
   touch,
@@ -329,7 +437,7 @@ function Leaderboard({
   drop = false,
   onToggle,
 }: {
-  rows: LeaderboardEntry[]
+  rows: import("@/game/types").LeaderboardEntry[]
   touch: boolean
   open: boolean
   /** Dropdown variant for short landscape screens (opened from the rank pill). */
