@@ -529,7 +529,7 @@ export default function Page() {
   const dailyArena = dailyConfig ? ARENAS[dailyConfig.arena].name : ""
 
   return (
-    <div className="gw-root" data-build="phase-b2-2026-10-24">
+    <main className="gw-root" data-build="phase-b2-2026-10-24">
       {screen === "menu" && sfx && (
         <GameView
           demo
@@ -642,6 +642,6 @@ export default function Page() {
         </span>
       )}
       {skin && <span className="gw-sr-only">{SKIN_NAME} skin unlocked.</span>}
-    </div>
+    </main>
   )
 }
