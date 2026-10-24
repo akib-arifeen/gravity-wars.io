@@ -131,6 +131,32 @@ export interface BossHud {
   splitDone: boolean
 }
 
+/** The visible HUD phrase for the fight's state. Stable between health updates. */
+export function bossPhaseText(boss: BossHud): string {
+  const label = boss.special ? BOSS_SPECIAL_LABEL[boss.special] : ""
+  if (boss.phase === "telegraph") return `${label} INCOMING`
+  if (boss.phase === "attack") {
+    return label === "GRAVITY MAW" ? "GRAVITY MAW ACTIVE" : label === "COLLAPSE" ? "COLLAPSE ACTIVE" : "LUNGE"
+  }
+  return boss.splitDone ? "WOUNDED" : "HUNTING"
+}
+
+/**
+ * One sentence for the screen-reader status region. The HUD updates several times a second, but
+ * this text only changes when the fight's state does (phase, special, wounded), so the region
+ * cannot read the health bar aloud continuously.
+ */
+export function bossAnnouncement(boss: BossHud): string {
+  if (boss.phase === "telegraph" && boss.special) {
+    return `${boss.name}: ${BOSS_SPECIAL_LABEL[boss.special].toLowerCase()} incoming.`
+  }
+  if (boss.phase === "attack" && boss.special) {
+    return `${boss.name}: ${BOSS_SPECIAL_LABEL[boss.special].toLowerCase()} active.`
+  }
+  if (boss.splitDone) return `${boss.name} is wounded.`
+  return `${boss.name} is hunting you.`
+}
+
 export interface EncounterState {
   levelId: string
   /** The body boss, or null for the Twin Pulsars set piece. */

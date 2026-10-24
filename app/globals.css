@@ -2090,7 +2090,8 @@ body {
 .gw-ability-req {
   font-size: 9px;
   letter-spacing: 0.06em;
-  color: rgba(232, 246, 255, 0.45);
+  /* Muted text token: 0.45 fell just under 4.5:1 on the chip's tinted panel background. */
+  color: rgba(232, 246, 255, 0.7);
 }
 
 .gw-daily-card {

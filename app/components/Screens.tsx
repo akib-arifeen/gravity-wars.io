@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import type { AchievementDef } from "@/game/achievements"
 import { ARENAS, ARENA_IDS } from "@/game/arenas"
 import {
@@ -21,8 +21,29 @@ import type { DailyConfig } from "@/game/daily"
 import { CONFIG } from "@/game/config"
 import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, RoundResult } from "@/game/types"
 import { AbilityIcon, LockIcon, StarIcon } from "./Icons"
+import { radioTabStop, radioTarget } from "./radioNav"
 
 const BEST_KEY = "gw:best:v1"
+
+/**
+ * Move focus and selection in a role="radio" group with the APG arrow/Home/End keys. Disabled
+ * radios are skipped; the target is focused before the selection changes so a re-render that
+ * swaps the panel below cannot lose it.
+ */
+function onRadioKey(
+  e: ReactKeyboardEvent<HTMLButtonElement>,
+  refs: { current: (HTMLButtonElement | null)[] },
+  index: number,
+  count: number,
+  isDisabled: ((index: number) => boolean) | undefined,
+  choose: (index: number) => void,
+) {
+  const target = radioTarget(e.key, index, count, isDisabled)
+  if (target === null) return
+  e.preventDefault()
+  refs.current[target]?.focus()
+  choose(target)
+}
 
 export const DIFFICULTIES: { id: Difficulty; label: string; sub: string; endlessSub: string }[] = [
   { id: "easy", label: "Easy", sub: "3 slow rivals", endlessSub: "gentle start" },
@@ -143,12 +164,12 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
   )
 }
 
-/** Three stars, filled up to `n`. */
+/** Three stars, filled up to `n`. The count is the image's accessible name; the icons are decorative. */
 function Stars({ n, size = 14 }: { n: number; size?: number }) {
   return (
-    <span className="gw-stars" aria-label={`${n} of 3 stars`}>
+    <span className="gw-stars" role="img" aria-label={`${n} of 3 stars`}>
       {[1, 2, 3].map((i) => (
-        <span key={i} className={i <= n ? "gw-star-on" : "gw-star-off"}>
+        <span key={i} className={i <= n ? "gw-star-on" : "gw-star-off"} aria-hidden="true">
           <StarIcon size={size} filled={i <= n} />
         </span>
       ))}
@@ -202,18 +223,18 @@ export function MenuScreen({
 }: MenuProps) {
   const [best, setBest] = useState<BestMap>({})
   const playRef = useRef<HTMLButtonElement>(null)
+  const modeButtons = useRef<(HTMLButtonElement | null)[]>([])
+  const levelButtons = useRef<(HTMLButtonElement | null)[]>([])
+  const diffButtons = useRef<(HTMLButtonElement | null)[]>([])
+  const arenaButtons = useRef<(HTMLButtonElement | null)[]>([])
   const diffRef = useRef(difficulty)
   diffRef.current = difficulty
   const onDiffRef = useRef(onDifficulty)
   onDiffRef.current = onDifficulty
-  const arenaRef = useRef(arena)
-  arenaRef.current = arena
   const modeRef = useRef(mode)
   modeRef.current = mode
   const activeRef = useRef(active)
   activeRef.current = active
-  const onArenaRef = useRef(onArena)
-  onArenaRef.current = onArena
 
   useEffect(() => {
     setBest(loadBest())
@@ -225,18 +246,9 @@ export function MenuScreen({
       if (!activeRef.current || e.ctrlKey || e.metaKey || e.altKey) return
       // In the campaign and the daily the arena and the difficulty are fixed, so those keys do nothing.
       if (modeRef.current === "campaign" || modeRef.current === "daily") return
-      const i = DIFFICULTIES.findIndex((d) => d.id === diffRef.current)
+      // Arrow keys belong to the focused radio group (see onRadioKey), not to the window.
       let next = -1
-      if (e.code === "ArrowUp" || e.code === "ArrowDown") {
-        const ai = ARENA_CHOICES.indexOf(arenaRef.current)
-        const an = Math.min(ARENA_CHOICES.length - 1, Math.max(0, ai + (e.code === "ArrowUp" ? -1 : 1)))
-        e.preventDefault()
-        onArenaRef.current(ARENA_CHOICES[an])
-        return
-      }
-      if (e.code === "ArrowLeft") next = Math.max(0, i - 1)
-      else if (e.code === "ArrowRight") next = Math.min(DIFFICULTIES.length - 1, i + 1)
-      else if (e.code === "Digit1" || e.code === "Numpad1") next = 0
+      if (e.code === "Digit1" || e.code === "Numpad1") next = 0
       else if (e.code === "Digit2" || e.code === "Numpad2") next = 1
       else if (e.code === "Digit3" || e.code === "Numpad3") next = 2
       if (next < 0) return
@@ -246,6 +258,13 @@ export function MenuScreen({
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
   }, [])
+
+  const modeIndex = MODES.findIndex((m) => m.id === mode)
+  const levelEnabled = CAMPAIGN_LEVELS.map((l) => isUnlocked(campaignProgress, l))
+  const levelIndex = CAMPAIGN_LEVELS.findIndex((l) => l.id === campaignLevel.id)
+  const diffIndex = DIFFICULTIES.findIndex((d) => d.id === difficulty)
+  const arenaIndex = ARENA_CHOICES.indexOf(arena)
+  const levelDisabled = (i: number) => !levelEnabled[i]
 
   const b = best[difficulty]
   const touch =
@@ -280,15 +299,20 @@ export function MenuScreen({
         <p className="gw-tagline">Eat debris. Absorb smaller rivals. Don&apos;t fall in.</p>
 
         <div className="gw-seg gw-seg-mode" role="radiogroup" aria-label="Mode">
-          {MODES.map((m) => (
+          {MODES.map((m, i) => (
             <button
               key={m.id}
+              ref={(el) => {
+                modeButtons.current[i] = el
+              }}
               type="button"
               role="radio"
               aria-checked={m.id === mode}
+              tabIndex={radioTabStop(modeIndex, MODES.length) === i ? 0 : -1}
               className="gw-seg-btn"
               data-on={m.id === mode ? "1" : undefined}
               onClick={() => onMode(m.id)}
+              onKeyDown={(e) => onRadioKey(e, modeButtons, i, MODES.length, undefined, (t) => onMode(MODES[t].id))}
             >
               <span className="gw-seg-name">{m.label}</span>
             </button>
@@ -302,17 +326,21 @@ export function MenuScreen({
               Sector {["I", "II", "III"][sector.id - 1]} &middot; {sector.name}
             </div>
             <div className="gw-levels" role="radiogroup" aria-label="Campaign level">
-              {CAMPAIGN_LEVELS.map((l) => {
-                const unlocked = isUnlocked(campaignProgress, l)
+              {CAMPAIGN_LEVELS.map((l, i) => {
+                const unlocked = levelEnabled[i]
                 const won = isWon(campaignProgress, l)
                 const lStars = starsOf(campaignProgress, l)
                 return (
                   <button
                     key={l.id}
+                    ref={(el) => {
+                      levelButtons.current[i] = el
+                    }}
                     type="button"
                     role="radio"
                     aria-checked={l.id === campaignLevel.id}
                     aria-label={`Level ${l.index}: ${l.name}${unlocked ? `, ${lStars} of 3 stars` : ", locked"}`}
+                    tabIndex={radioTabStop(levelIndex, CAMPAIGN_LEVELS.length, levelDisabled) === i ? 0 : -1}
                     className="gw-level-btn"
                     data-on={l.id === campaignLevel.id ? "1" : undefined}
                     data-won={won ? "1" : undefined}
@@ -320,6 +348,11 @@ export function MenuScreen({
                     data-sector={l.sector}
                     disabled={!unlocked}
                     onClick={() => onCampaignLevel(l)}
+                    onKeyDown={(e) =>
+                      onRadioKey(e, levelButtons, i, CAMPAIGN_LEVELS.length, levelDisabled, (t) =>
+                        onCampaignLevel(CAMPAIGN_LEVELS[t]),
+                      )
+                    }
                   >
                     <span className="gw-level-no">{l.index}</span>
                     <span className="gw-level-name">{l.name}</span>
@@ -380,15 +413,22 @@ export function MenuScreen({
           <>
             <div className="gw-arena-label">{mode === "endless" ? "Starting skill" : "Difficulty"}</div>
             <div className="gw-seg" role="radiogroup" aria-label="Difficulty">
-              {DIFFICULTIES.map((d) => (
+              {DIFFICULTIES.map((d, i) => (
                 <button
                   key={d.id}
+                  ref={(el) => {
+                    diffButtons.current[i] = el
+                  }}
                   type="button"
                   role="radio"
                   aria-checked={d.id === difficulty}
+                  tabIndex={radioTabStop(diffIndex, DIFFICULTIES.length) === i ? 0 : -1}
                   className="gw-seg-btn"
                   data-on={d.id === difficulty ? "1" : undefined}
                   onClick={() => onDifficulty(d.id)}
+                  onKeyDown={(e) =>
+                    onRadioKey(e, diffButtons, i, DIFFICULTIES.length, undefined, (t) => onDifficulty(DIFFICULTIES[t].id))
+                  }
                 >
                   <span className="gw-seg-name">{d.label}</span>
                   <span className="gw-seg-sub">{mode === "endless" ? d.endlessSub : d.sub}</span>
@@ -398,15 +438,22 @@ export function MenuScreen({
 
             <div className="gw-arena-label">Arena</div>
             <div className="gw-arenas" role="radiogroup" aria-label="Arena">
-              {ARENA_CHOICES.map((a) => (
+              {ARENA_CHOICES.map((a, i) => (
                 <button
                   key={a}
+                  ref={(el) => {
+                    arenaButtons.current[i] = el
+                  }}
                   type="button"
                   role="radio"
                   aria-checked={a === arena}
+                  tabIndex={radioTabStop(arenaIndex, ARENA_CHOICES.length) === i ? 0 : -1}
                   className="gw-arena-btn"
                   data-on={a === arena ? "1" : undefined}
                   onClick={() => onArena(a)}
+                  onKeyDown={(e) =>
+                    onRadioKey(e, arenaButtons, i, ARENA_CHOICES.length, undefined, (t) => onArena(ARENA_CHOICES[t]))
+                  }
                 >
                   {a === "random" ? "Random" : ARENAS[a].name}
                 </button>

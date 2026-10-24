@@ -5,12 +5,15 @@ import { describe, expect, it } from "vitest"
 import {
   BOSS_SPECS,
   applyCampaignLevel,
+  bossAnnouncement,
   bossDefeated,
   bossHud,
   bossIntent,
+  bossPhaseText,
   damageBoss,
   repulseDamageAgainst,
   updateBoss,
+  type BossHud,
   type BossState,
   type EncounterState,
 } from "../boss"
@@ -349,5 +352,51 @@ describe("boss HUD and defeat", () => {
     expect(updateBoss(world, encounter)).toEqual([{ type: "defeated" }])
     expect(bossDefeated(world, encounter)).toBe(true)
     expect(bossDefeated(world, null)).toBe(false)
+  })
+})
+
+describe("boss HUD text and announcements", () => {
+  function hud(over: Partial<BossHud> = {}): BossHud {
+    return {
+      name: BOSS_SPECS.leviathan.name,
+      kind: "leviathan",
+      healthPct: 1,
+      mass: BOSS_SPECS.leviathan.mass,
+      phase: "stalk",
+      special: null,
+      t: 0,
+      total: 1,
+      splitDone: false,
+      ...over,
+    }
+  }
+
+  it("names the visible phase for every state", () => {
+    expect(bossPhaseText(hud())).toBe("HUNTING")
+    expect(bossPhaseText(hud({ phase: "telegraph", special: "pull" }))).toBe("GRAVITY MAW INCOMING")
+    expect(bossPhaseText(hud({ phase: "attack", special: "pull" }))).toBe("GRAVITY MAW ACTIVE")
+    expect(bossPhaseText(hud({ phase: "attack", special: "ult" }))).toBe("COLLAPSE ACTIVE")
+    expect(bossPhaseText(hud({ phase: "attack", special: "lunge" }))).toBe("LUNGE")
+    expect(bossPhaseText(hud({ phase: "recover", splitDone: true }))).toBe("WOUNDED")
+  })
+
+  it("keeps the announcement stable while health, mass and timers update", () => {
+    // The HUD publishes about four times a second; only a state change may change the text, or a
+    // live region would read the fight aloud continuously.
+    const texts = new Set<string>()
+    for (let i = 0; i < 40; i++) {
+      texts.add(bossAnnouncement(hud({ healthPct: 1 - i * 0.02, mass: 55 - i, t: i * 0.25 })))
+    }
+    expect(texts.size).toBe(1)
+  })
+
+  it("announces telegraphs, attacks and the wound once each", () => {
+    expect(bossAnnouncement(hud())).toBe("The Leviathan is hunting you.")
+    expect(bossAnnouncement(hud({ phase: "telegraph", special: "pull" }))).toBe(
+      "The Leviathan: gravity maw incoming.",
+    )
+    expect(bossAnnouncement(hud({ phase: "attack", special: "pull" }))).toBe("The Leviathan: gravity maw active.")
+    expect(bossAnnouncement(hud({ phase: "recover", splitDone: true }))).toBe("The Leviathan is wounded.")
+    expect(bossAnnouncement(hud({ phase: "stalk", splitDone: true }))).toBe("The Leviathan is wounded.")
   })
 })

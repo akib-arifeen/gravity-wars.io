@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { CONFIG } from "@/game/config"
 import { ARENAS } from "@/game/arenas"
-import { BOSS_SPECIAL_LABEL, type BossHud } from "@/game/boss"
+import { bossAnnouncement, bossPhaseText, type BossHud } from "@/game/boss"
 import { COSMIC_INFO } from "@/game/cosmic"
 import { FEED_MAX, type FeedItem, type FeedView } from "@/game/feed"
 import type { AbilityId } from "@/game/campaign"
@@ -186,6 +186,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
 
   const feed = hud?.feed ?? null
   const bossActive = boss !== null && hud?.phase !== "over"
+  // The visual bar changes ~4x/s; the status text below changes only when the fight's state does.
+  const bossAnnounce = bossActive && boss ? bossAnnouncement(boss) : ""
 
   return (
     <div className="gw-hud" inert={inert}>
@@ -286,6 +288,11 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
           </div>
 
           {bossActive && boss && <BossBar boss={boss} />}
+          {/* Persistent polite status region: only its text changing announces, and that text
+              ignores the 4 Hz mass/health updates. */}
+          <p className="gw-sr-only" role="status" aria-live="polite">
+            {bossAnnounce}
+          </p>
 
           {ed && hud.leaderboard.length > 0 && (
             <Leaderboard rows={hud.leaderboard} touch={layout === "touch"} open={lbOpen} onToggle={() => setLbOpen((o) => !o)} />
@@ -386,32 +393,28 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   )
 }
 
-/** The boss bar: name, mass, and the telegraph stage in words. */
+/** The boss bar: a visual-only meter plus the phase line. The live region lives in the HUD. */
 function BossBar({ boss }: { boss: BossHud }) {
   const telegraph = boss.phase === "telegraph" || boss.phase === "attack"
-  const label = boss.special ? BOSS_SPECIAL_LABEL[boss.special] : ""
-  const phaseText =
-    boss.phase === "telegraph"
-      ? `${label} INCOMING`
-      : boss.phase === "attack"
-        ? label === "GRAVITY MAW"
-          ? "GRAVITY MAW ACTIVE"
-          : label === "COLLAPSE"
-            ? "COLLAPSE ACTIVE"
-            : "LUNGE"
-        : boss.splitDone
-          ? "WOUNDED"
-          : "HUNTING"
+  const health = Math.max(0, Math.min(100, Math.round(boss.healthPct * 100)))
   return (
-    <div className={`gw-boss${telegraph ? " gw-boss-warn" : ""}`} role="status" aria-live="polite">
+    <div className={`gw-boss${telegraph ? " gw-boss-warn" : ""}`}>
       <div className="gw-boss-head">
         <span className="gw-boss-name">{boss.name}</span>
         <span className="gw-boss-mass">{Math.round(boss.mass)} mass</span>
       </div>
-      <div className="gw-boss-bar" role="presentation">
+      <div
+        className="gw-boss-bar"
+        role="meter"
+        aria-label={`${boss.name} health`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={health}
+        aria-valuetext={`${health}% mass`}
+      >
         <div className="gw-boss-fill" style={{ width: `${Math.max(0, boss.healthPct * 100)}%` }} />
       </div>
-      <div className="gw-boss-phase">{phaseText}</div>
+      <div className="gw-boss-phase">{bossPhaseText(boss)}</div>
     </div>
   )
 }
