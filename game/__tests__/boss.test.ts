@@ -17,10 +17,11 @@ import {
   type BossState,
   type EncounterState,
 } from "../boss"
+import { botIntent, createBotBrain } from "../bots"
 import { CAMPAIGN_LEVELS, levelById } from "../campaign"
 import { CONFIG } from "../config"
-import { createWorld } from "../engine"
-import type { Body, World } from "../types"
+import { createWorld, step } from "../engine"
+import type { Body, Intent, World } from "../types"
 
 const DT = CONFIG.dt
 
@@ -189,13 +190,16 @@ describe("boss state machine", () => {
     expect(fire.ult).toBe(true)
   })
 
-  it("lunges instead when the collapse is not charged", () => {
+  it("arms its own collapse when nothing has charged it", () => {
     const { world, boss, bossBody } = encounterWorld("fall-12")
     world.time = BOSS_SPECS.voidKing.wakeAfter
     bossBody.ult = 0
     armSpecial(boss, "ult")
     bossIntent(world, boss)
-    expect(boss.special).toBe("lunge")
+    expect(boss.special).toBe("ult")
+    untilPhase(world, boss, "attack")
+    const fire = bossIntent(world, boss)
+    expect(fire.ult).toBe(true)
   })
 
   it("alternates between its specials", () => {
@@ -219,6 +223,59 @@ describe("boss state machine", () => {
     expect(intent.ax).toBe(0)
     expect(intent.ay).toBe(0)
     expect(intent.pull).toBe(false)
+  })
+})
+
+// The Void King is the only other body in its arena, so nothing ever feeds it the charge its
+// collapse needs. This plays the real level forward with the game's own hard brain flying the
+// player: movement only, no repulses, no ultimates, so the boss is never damaged or fed and its
+// ladder is the only thing under test.
+describe("the Void King's signature ladder", () => {
+  /** Play level 12 forward; report the specials it telegraphed and whether its collapse actually
+   *  ran (the ult meter spent into an active ultimate, not just a relabelled telegraph). */
+  function ladder(seconds: number): { specials: string[]; collapseRan: boolean; played: number } {
+    const l = level("fall-12")
+    const world = createWorld({ seed: l.seed, difficulty: l.difficulty, arena: l.arena, botCount: l.bots })
+    world.phase = "playing"
+    world.countdown = 0
+    const encounter = applyCampaignLevel(world, l)!
+    const boss = encounter.boss!
+    const brain = createBotBrain("player", "hard", l.seed + 97)
+    const specials: string[] = []
+    let collapseRan = false
+    let lastPhase = boss.phase
+    const intents = new Map<string, Intent>()
+    for (let i = 0; i < Math.ceil(seconds / DT) && world.phase === "playing"; i++) {
+      const me = world.bodies[0]
+      const bossBody = world.bodies.find((b) => b.id === boss.id)
+      intents.clear()
+      if (me.alive) {
+        const fly = botIntent(world, brain)
+        intents.set(me.id, { ax: fly.ax, ay: fly.ay, pull: false })
+      }
+      if (bossBody && !boss.defeated) intents.set(boss.id, bossIntent(world, boss))
+      step(world, intents)
+      updateBoss(world, encounter)
+      const body = world.bodies.find((b) => b.id === boss.id)
+      if (boss.phase === "telegraph" && lastPhase !== "telegraph") specials.push(boss.special ?? "none")
+      if (body && body.ultActive > 0) collapseRan = true
+      lastPhase = boss.phase
+    }
+    return { specials, collapseRan, played: world.time }
+  }
+
+  it("reaches its collapse unaided, then keeps climbing the ladder", () => {
+    const { specials, collapseRan, played } = ladder(70)
+    // Guard: the encounter stayed live past the first two specials, so a short ladder below is a
+    // boss failure and not a pilot death.
+    expect(played).toBeGreaterThan(40)
+    // Nothing in the arena can charge the boss; it must still reach its signature special.
+    expect(specials).toContain("ult")
+    // And the engine must actually run it, not merely relabel a lunge.
+    expect(collapseRan).toBe(true)
+    // The ladder advances past the collapse instead of one move repeating forever.
+    const firstCollapse = specials.indexOf("ult")
+    expect(specials.slice(firstCollapse + 1)).toContain("lunge")
   })
 })
 

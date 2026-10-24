@@ -360,8 +360,12 @@ function findBody(world: World, id: string): Body | undefined {
 }
 
 function startTelegraph(boss: BossState, spec: BossSpec, body: Body): void {
-  // The Void King prefers the collapse; if its charge is not ready, it lunges instead.
+  // The Void King fights alone: with no rival to absorb its meter never fills, so every collapse
+  // was downgraded to a lunge. Its signature ultimate counts as armed; the engine still spends the
+  // meter and runs the collapse through the ordinary path. Any other ult with no charge still
+  // downgrades.
   boss.special = boss.nextSpecial
+  if (boss.special === "ult" && boss.kind === "voidKing") body.ult = 1
   if (boss.special === "ult" && body.ult < 1) boss.special = "lunge"
   boss.nextSpecial =
     boss.special === "pull" || boss.special === "ult" ? "lunge" : boss.kind === "voidKing" ? "ult" : "pull"
