@@ -231,13 +231,14 @@ export function bossIntent(world: World, boss: BossState): Intent {
         return { ax: aim.ax * 0.55, ay: aim.ay * 0.55, pull: true }
       }
       if (boss.special === "ult") {
-        const aim = aimAt(body, player)
         const firing = boss.t <= CONFIG.dt * 1.5 && body.ult >= 1 && body.ultActive === 0
         if (!firing && body.ultActive === 0) {
           endAttack(boss)
           return wander()
         }
-        return { ax: aim.ax * 0.4, ay: aim.ay * 0.4, pull: body.ultActive > 0, ult: firing }
+        // Channel in place: the collapse drags the player in, so chasing adds nothing, and
+        // thrusting through the whole window has flown the boss into the maw's black hole.
+        return { ax: 0, ay: 0, pull: body.ultActive > 0, ult: firing }
       }
       // lunge: one dash step, then recover
       const aim = aimAt(body, player)
@@ -360,8 +361,12 @@ function findBody(world: World, id: string): Body | undefined {
 }
 
 function startTelegraph(boss: BossState, spec: BossSpec, body: Body): void {
-  // The Void King prefers the collapse; if its charge is not ready, it lunges instead.
+  // The Void King fights alone: with no rival to absorb its meter never fills, so every collapse
+  // was downgraded to a lunge. Its signature ultimate counts as armed; the engine still spends the
+  // meter and runs the collapse through the ordinary path. Any other ult with no charge still
+  // downgrades.
   boss.special = boss.nextSpecial
+  if (boss.special === "ult" && boss.kind === "voidKing") body.ult = 1
   if (boss.special === "ult" && body.ult < 1) boss.special = "lunge"
   boss.nextSpecial =
     boss.special === "pull" || boss.special === "ult" ? "lunge" : boss.kind === "voidKing" ? "ult" : "pull"

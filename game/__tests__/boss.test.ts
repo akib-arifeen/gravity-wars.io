@@ -17,10 +17,11 @@ import {
   type BossState,
   type EncounterState,
 } from "../boss"
+import { botIntent, createBotBrain } from "../bots"
 import { CAMPAIGN_LEVELS, levelById } from "../campaign"
 import { CONFIG } from "../config"
-import { createWorld } from "../engine"
-import type { Body, World } from "../types"
+import { createWorld, step } from "../engine"
+import type { Body, Intent, World } from "../types"
 
 const DT = CONFIG.dt
 
@@ -189,13 +190,16 @@ describe("boss state machine", () => {
     expect(fire.ult).toBe(true)
   })
 
-  it("lunges instead when the collapse is not charged", () => {
+  it("arms its own collapse when nothing has charged it", () => {
     const { world, boss, bossBody } = encounterWorld("fall-12")
     world.time = BOSS_SPECS.voidKing.wakeAfter
     bossBody.ult = 0
     armSpecial(boss, "ult")
     bossIntent(world, boss)
-    expect(boss.special).toBe("lunge")
+    expect(boss.special).toBe("ult")
+    untilPhase(world, boss, "attack")
+    const fire = bossIntent(world, boss)
+    expect(fire.ult).toBe(true)
   })
 
   it("alternates between its specials", () => {
@@ -219,6 +223,144 @@ describe("boss state machine", () => {
     expect(intent.ax).toBe(0)
     expect(intent.ay).toBe(0)
     expect(intent.pull).toBe(false)
+  })
+})
+
+// The Void King is the only other body in its arena, so nothing ever feeds it the charge its
+// collapse needs. This plays the real level forward with the game's own hard brain flying the
+// player: movement only, no repulses, no ultimates, so the boss is never damaged or fed and its
+// ladder is the only thing under test.
+describe("the Void King's signature ladder", () => {
+  /** Play level 12 forward; report the specials it telegraphed, whether its collapse actually ran
+   *  (the ult meter spent into an active ultimate, not just a relabelled telegraph), and how the
+   *  boss itself ended. */
+  function ladder(seconds: number): {
+    specials: string[]
+    collapseRan: boolean
+    played: number
+    deathCause: string
+    bossAlive: boolean
+  } {
+    const l = level("fall-12")
+    const world = createWorld({ seed: l.seed, difficulty: l.difficulty, arena: l.arena, botCount: l.bots })
+    world.phase = "playing"
+    world.countdown = 0
+    const encounter = applyCampaignLevel(world, l)!
+    const boss = encounter.boss!
+    const brain = createBotBrain("player", "hard", l.seed + 97)
+    const specials: string[] = []
+    let collapseRan = false
+    let deathCause = ""
+    let lastPhase = boss.phase
+    const intents = new Map<string, Intent>()
+    for (let i = 0; i < Math.ceil(seconds / DT) && world.phase === "playing"; i++) {
+      const me = world.bodies[0]
+      const bossBody = world.bodies.find((b) => b.id === boss.id)
+      intents.clear()
+      if (me.alive) {
+        const fly = botIntent(world, brain)
+        intents.set(me.id, { ax: fly.ax, ay: fly.ay, pull: false })
+      }
+      if (bossBody && !boss.defeated) intents.set(boss.id, bossIntent(world, boss))
+      step(world, intents)
+      updateBoss(world, encounter)
+      const body = world.bodies.find((b) => b.id === boss.id)
+      if (boss.phase === "telegraph" && lastPhase !== "telegraph") specials.push(boss.special ?? "none")
+      if (body && body.ultActive > 0) collapseRan = true
+      for (const ev of world.events) if (ev.type === "death" && ev.bodyId === boss.id) deathCause = String(ev.cause.by)
+      lastPhase = boss.phase
+    }
+    return {
+      specials,
+      collapseRan,
+      played: world.time,
+      deathCause,
+      bossAlive: world.bodies.find((b) => b.id === boss.id)?.alive ?? false,
+    }
+  }
+
+  it("reaches its collapse unaided, then keeps climbing the ladder", () => {
+    const { specials, collapseRan, played } = ladder(70)
+    // Guard: the encounter stayed live past the first two specials, so a short ladder below is a
+    // boss failure and not a pilot death.
+    expect(played).toBeGreaterThan(40)
+    // Nothing in the arena can charge the boss; it must still reach its signature special.
+    expect(specials).toContain("ult")
+    // And the engine must actually run it, not merely relabel a lunge.
+    expect(collapseRan).toBe(true)
+    // The ladder advances past the collapse instead of one move repeating forever.
+    const firstCollapse = specials.indexOf("ult")
+    expect(specials.slice(firstCollapse + 1)).toContain("lunge")
+  })
+
+  it("holds position while its collapse drags the player in", () => {
+    const { world, boss, bossBody } = encounterWorld("fall-12")
+    const player = world.bodies[0]
+    // Put both bodies on the same orbit in clear space: the maw's gravity then acts along the
+    // radius, so the axis between them carries only what the boss does.
+    let angle = 0
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 32) {
+      const bx = Math.cos(a) * 1200
+      const by = Math.sin(a) * 1200
+      const px = bx - Math.sin(a) * 420
+      const py = by + Math.cos(a) * 420
+      if (world.wells.every((w) => Math.hypot(w.x - bx, w.y - by) > 420 && Math.hypot(w.x - px, w.y - py) > 420)) {
+        angle = a
+        break
+      }
+    }
+    bossBody.x = Math.cos(angle) * 1200
+    bossBody.y = Math.sin(angle) * 1200
+    bossBody.vx = 0
+    bossBody.vy = 0
+    const px = bossBody.x - Math.sin(angle) * 420
+    const py = bossBody.y + Math.cos(angle) * 420
+    player.x = px
+    player.y = py
+    player.vx = 0
+    player.vy = 0
+    world.time = BOSS_SPECS.voidKing.wakeAfter
+    armSpecial(boss, "ult")
+    const intents = new Map<string, Intent>()
+    intents.set(player.id, { ax: 0, ay: 0, pull: false })
+    // Telegraph, then measure the first second of the channel.
+    for (let i = 0; i < 200 && boss.phase !== "attack" && world.phase === "playing"; i++) {
+      intents.set(boss.id, bossIntent(world, boss))
+      step(world, intents)
+    }
+    expect(boss.phase).toBe("attack")
+    expect(player.alive).toBe(true)
+    const axis = Math.hypot(player.x - bossBody.x, player.y - bossBody.y)
+    const ux = (player.x - bossBody.x) / axis
+    const uy = (player.y - bossBody.y) / axis
+    const bossFrom = { x: bossBody.x, y: bossBody.y }
+    for (let i = 0; i < Math.round(1 / DT) && world.phase === "playing"; i++) {
+      intents.set(boss.id, bossIntent(world, boss))
+      step(world, intents)
+    }
+    expect(bossBody.ultActive).toBeGreaterThan(0)
+    expect(bossBody.pulling).toBe(true)
+    const bossAlong = (bossBody.x - bossFrom.x) * ux + (bossBody.y - bossFrom.y) * uy
+    const playerAlong = (player.x - px) * ux + (player.y - py) * uy
+    // The boss channels: no thrust along the line to the player.
+    expect(Math.abs(bossAlong)).toBeLessThan(12)
+    // The collapse still bites: the player is dragged toward the boss.
+    expect(playerAlong).toBeLessThan(-30)
+  })
+
+  it("channels its collapse instead of flying itself into the maw", () => {
+    const { specials, played, deathCause, bossAlive } = ladder(70)
+    // The maw's black hole stays lethal, and nothing here steers the boss into it.
+    expect(deathCause).not.toBe("blackhole")
+    expect(bossAlive).toBe(true)
+    // Losing the boss to its own attack is what ended the encounter above, so the ladder has to
+    // keep going for the full window here.
+    expect(played).toBeGreaterThan(69)
+    // The signature still alternates after the second collapse: the fix must not trade one
+    // unreachable move for another.
+    const secondCollapse = specials.indexOf("ult", specials.indexOf("ult") + 1)
+    expect(secondCollapse).toBeGreaterThan(0)
+    expect(specials.slice(secondCollapse + 1)).toContain("lunge")
   })
 })
 
