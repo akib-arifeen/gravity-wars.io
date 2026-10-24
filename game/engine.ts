@@ -7,6 +7,19 @@
 import { CONFIG } from "./config"
 import { buildArena } from "./arenas"
 import { gmScale, lethalRadius, updateCosmic } from "./cosmic"
+import {
+  assistView,
+  emptyAssist,
+  grantSurge,
+  markPaid,
+  noteDash,
+  resetAssist,
+  surgeSpeedMul,
+  surgeThrustMul,
+  tickAssist,
+  trackPass,
+  type BurnReady,
+} from "./assist"
 import { rand, randRange, seedState } from "./rng"
 import type {
   ArenaId,
@@ -116,7 +129,8 @@ export interface CreateWorldOptions {
  *    a row `gap` apart along the ring tangent, groups evenly spaced by anchor angle. Velocity 0,
  *    px/py = x/y, energy max, shield CONFIG.body.spawnShield, all timers/cooldowns/ult 0, power
  *    all 0, lastHitBy "",
- *    lastHitAt -1e9, flags false, stats all 0 with peakMass = mass, alive true.
+ *    lastHitAt -1e9, assist = emptyAssist(), flags false, stats all 0 with peakMass = mass,
+ *    alive true.
  * 3. Debris: CONFIG.debris.target dust/rock and CONFIG.crystal.target crystals placed per the
  *    debris field (see step 11's placement rule), never within well.radius +
  *    CONFIG.debris.wellClearance of any well. Ids from 1; nextDebrisId is the next unused id.
@@ -229,6 +243,7 @@ export function createWorld(opts: CreateWorldOptions): World {
       ultActive: 0,
       power: { overdrive: 0, magnet: 0, phase: 0 },
       slingCd: 0,
+      assist: emptyAssist(),
       lastHitBy: "",
       lastHitAt: -1e9,
       stats: {
@@ -298,7 +313,7 @@ export function createWorld(opts: CreateWorldOptions): World {
  *     d. meteors = updateCosmic(world) (cosmic.ts); gs = gmScale(world).
  *  3. Each ALIVE body, in array order:
  *     a. px,py = x,y. shield, warpCooldown, dashCd, repulseCd, slingCd = max(0, value - dt); each
- *        power timer = max(0, value - dt). If ultActive > 0: ultActive -= dt; if it reaches <= 0,
+ *        power timer = max(0, value - dt); assist cooldown and surge decay (assist.ts). If ultActive > 0: ultActive -= dt; if it reaches <= 0,
  *        ultActive = 0 and emit {type:"ultEnd"}.
  *     b. Clamp the intent vector a to length <= 1. thrusting = |a| > CONFIG.body.thrustDeadzone
  *        && energy > 0. pulling = intent.pull && energy > 0. idleTime = 0 if thrusting or
@@ -309,7 +324,9 @@ export function createWorld(opts: CreateWorldOptions): World {
  *        - Dash: intent.dash && dashCd == 0 && energy >= dash.cost -> direction u = a/|a| if
  *          thrusting-length |a| > thrustDeadzone, else v/|v| if |v| >= 1e-6, else no dash (and no
  *          cost). On a dash: energy -= cost; impulse = u * dash.impulse (added in 3f); dashCd =
- *          dash.cooldown; stats.dashes += 1; emit {type:"dash", dx/dy = u}.
+ *          dash.cooldown; stats.dashes += 1; emit {type:"dash", dx/dy = u}. The dash is then
+ *          offered to the assist pass (assist.ts): inside a flyby's periapsis window it is an
+ *          Oberth burn and pays out immediately (7b).
  *        - Repulse: intent.repulse && repulseCd == 0 && energy >= repulse.cost -> energy -= cost;
  *          repulseCd = repulse.cooldown; the body repulses in step 4b; stats.repulses += 1; emit
  *          {type:"repulse", r: repulseRadius(body)}.
@@ -335,8 +352,9 @@ export function createWorld(opts: CreateWorldOptions): World {
  *          zone centre (skip d == 0);
  *        - thrust: aT = thrustAccel(mass) * a when thrusting, else 0.
  *     f. Velocity: vNo = v + (gravity + wall + safety + beams + repulsors) * dt + dash impulse.
- *        vNew = vNo + aT*dt. If |vNew| > maxSpeed(mass) and |vNew| > |vNo|, rescale vNew to
- *        length max(maxSpeed(mass), |vNo|). Drag: v = vNew * exp(-drag * m * dt), m = product of
+ *        vNew = vNo + aT*dt, where aT = thrustAccel(mass) * |a| * the surge's thrust multiplier.
+ *        If |vNew| > maxSpeed(mass) * the surge's speed multiplier and |vNew| > |vNo|, rescale
+ *        vNew to length max(that ceiling, |vNo|). (Surge multipliers are 1 with no surge.) Drag: v = vNew * exp(-drag * m * dt), m = product of
  *        the strengths of nebula zones containing the centre (1 if none). Clamp |v| to
  *        hardSpeedCap. Position += v*dt. stats.topSpeed = max(topSpeed, |v|).
  *  4. Pull: for each alive pulling body P, R = pullRadius(P), k = (P.ultActive > 0 ?
@@ -365,6 +383,15 @@ export function createWorld(opts: CreateWorldOptions): World {
  *       n = (body - well)/d (use (1,0) if d == 0) to d = well.radius + radius; vrel = (v - wv)·n;
  *       if vrel < 0: v -= (1 + solidRestitution) * vrel * n and, when -vrel > 40, emit
  *       {type:"solidHit", impulse = -(1 + solidRestitution) * vrel * mass}.
+ *  7b. Gravity assists (assist.ts): every living body's flyby pass is opened or advanced. A pass
+ *      opens on crossing a well's assist band while closing on the well in the well's own frame;
+ *      periapsis is where that relative radial speed flips positive. A pass pays out (Oberth burn)
+ *      only if a dash landed within the difficulty's window of that periapsis, the periapsis was
+ *      inside the well's peri band, the relative speed was high enough, the payout cooldown and
+ *      same-well lock are clear, and the pass has not paid. A burn grants energy and Singularity
+ *      charge, a prograde impulse relative to the well, the graded speed surge, stats.slingshots
+ *      += 1, sets slingCd so the legacy slingshot cannot double-pay, and emits {type:"oberth"}.
+ *      A pass that leaves the band or outlives CONFIG.assist.maxPass is dropped unrewarded.
  *  8. Eating, bodies then debris in array order (as before): an alive body eats each debris whose
  *     centre distance < radius: mass += debris.mass; crystals add CONFIG.crystal.energy (clamped)
  *     and count in stats.crystals; comets count in stats.comets; dust/rock in stats.debrisEaten.
@@ -379,10 +406,12 @@ export function createWorld(opts: CreateWorldOptions): World {
  *     bounce otherwise). An absorption also adds small.mass / ult.chargeMass to big.ult (clamp 1;
  *     ultReady as in 8).
  * 10. For every body: radius = radiusForMass(mass); stats.peakMass = max(peakMass, mass).
- *     Slingshot: each alive body with slingCd == 0 whose speed > slingshot.minSpeedMul *
- *     maxSpeed(mass) and whose centre is within slingshot.band * well.radius + 60 of any well:
- *     energy += slingshot.energy (clamp), ult += slingshot.ult (clamp, ultReady as in 8), slingCd
- *     = slingshot.cooldown, stats.slingshots += 1, emit {type:"slingshot", speed}.
+ *     Slingshot (the legacy fast-pass perk, unchanged): each alive body with slingCd == 0 whose
+ *     speed > slingshot.minSpeedMul * maxSpeed(mass) and whose centre is within
+ *     slingshot.band * well.radius + 60 of any well: energy += slingshot.energy (clamp), ult +=
+ *     slingshot.ult (clamp, ultReady as in 8), slingCd = slingshot.cooldown, stats.slingshots += 1,
+ *     emit {type:"slingshot", speed}. An Oberth burn in the same step sets slingCd, so it
+ *     suppresses this. Movement progression comes from the burn's surge, not from this perk.
  * 11. Spawning (placement for dust/rock: if world.debrisField.ringShare > 0, with probability
  *     ringShare (one rand() draw, made only when ringShare > 0) pick a point uniform by area in
  *     the annulus [ringInner, ringOuter], else uniform over the disc of radius arenaRadius; retry
@@ -536,6 +565,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     b.dashCd = Math.max(0, b.dashCd - dt)
     b.repulseCd = Math.max(0, b.repulseCd - dt)
     b.slingCd = Math.max(0, b.slingCd - dt)
+    tickAssist(b.assist, dt)
     b.power.overdrive = Math.max(0, b.power.overdrive - dt)
     b.power.magnet = Math.max(0, b.power.magnet - dt)
     b.power.phase = Math.max(0, b.power.phase - dt)
@@ -610,6 +640,9 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
         b.dashCd = ab.dash.cooldown
         b.stats.dashes += 1
         events.push({ type: "dash", bodyId: b.id, x: b.x, y: b.y, dx: ux, dy: uy })
+        // A dash is the Oberth burn only when it lands inside a real flyby's periapsis window.
+        const burn = noteDash(b, wells, time)
+        if (burn) applyBurn(world, b, burn, events)
       }
     }
     if (wantRepulse && b.repulseCd === 0 && b.energy >= ab.repulse.cost) {
@@ -723,7 +756,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     let aTx = 0
     let aTy = 0
     if (thrusting) {
-      const ta = thrustAccel(b.mass)
+      const ta = thrustAccel(b.mass) * surgeThrustMul(b)
       aTx = ta * ax
       aTy = ta * ay
     }
@@ -734,7 +767,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     let vx = vNoX + aTx * dt
     let vy = vNoY + aTy * dt
     const sNew = Math.sqrt(vx * vx + vy * vy)
-    const ms = maxSpeed(b.mass)
+    const ms = maxSpeed(b.mass) * surgeSpeedMul(b)
     if (sNew > ms) {
       const sNo = Math.sqrt(vNoX * vNoX + vNoY * vNoY)
       if (sNew > sNo) {
@@ -980,6 +1013,16 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
           }
         }
       }
+    }
+  }
+
+  // 7b. gravity assists: open/advance flyby passes and grade a dash already taken at periapsis.
+  if (wells.length > 0) {
+    for (let bi = 0; bi < bodies.length; bi++) {
+      const b = bodies[bi]
+      if (!b.alive) continue
+      const burn = trackPass(b, wells, time)
+      if (burn) applyBurn(world, b, burn, events)
     }
   }
 
@@ -1278,7 +1321,8 @@ export function rankOf(world: World, id: string): number {
 /**
  * HUD view of the player. countdown is Math.ceil(world.countdown); lowEnergy uses lowThreshold;
  * dashMax/repulseMax = the abilities' cooldowns; cosmic = world.cosmic ? {kind, stage,
- * secondsLeft: (stage === "warning" ? warning : duration) - t} : null; escalating =
+ * secondsLeft: (stage === "warning" ? warning : duration) - t} : null; assist = the pass view
+ * from assist.ts plus the surge timer/multiplier; escalating =
  * arenaRadius < arenaBase; arena = world.arena; mode = world.mode; endless = world.endless ?
  * {respawnIn, best, deaths, kills, lastKiller: name of lastKillerId's body or ""} : null;
  * leaderboard = leaderboard(world, 10); the rest mirrors the player body.
@@ -1311,6 +1355,16 @@ export function hudSnapshot(world: World): HudSnapshot {
     ult: p.ult,
     ultActive: p.ultActive,
     power: { overdrive: p.power.overdrive, magnet: p.power.magnet, phase: p.power.phase },
+    assist: (() => {
+      const v = assistView(world, p)
+      return {
+        wellId: v.wellId,
+        stage: v.stage,
+        window: v.window,
+        surge: p.assist.surge,
+        surgeMul: p.assist.surge > 0 ? p.assist.surgeMul : 1,
+      }
+    })(),
     cosmic:
       cz && cfgCosmic
         ? {
@@ -1572,6 +1626,56 @@ function leavePlay(b: Body, events: GameEvent[]): void {
   b.power.overdrive = 0
   b.power.magnet = 0
   b.power.phase = 0
+  resetAssist(b.assist)
+}
+
+/**
+ * Apply a graded Oberth burn: energy, Singularity charge, a prograde impulse along the velocity
+ * relative to the well (the Oberth effect, as an impulse), and the earned speed surge.
+ */
+function applyBurn(world: World, b: Body, r: BurnReady, events: GameEvent[]): void {
+  const ec = CONFIG.energy
+  b.energy = Math.min(ec.max, b.energy + r.energy)
+  const before = b.ult
+  b.ult = Math.min(1, b.ult + r.ult)
+  if (before < 1 && b.ult >= 1) events.push({ type: "ultReady", bodyId: b.id })
+
+  let ux = b.vx - r.well.vx
+  let uy = b.vy - r.well.vy
+  const len = Math.sqrt(ux * ux + uy * uy)
+  if (len > 1e-6) {
+    ux /= len
+    uy /= len
+    let vx = b.vx + ux * r.impulse
+    let vy = b.vy + uy * r.impulse
+    const sp = Math.sqrt(vx * vx + vy * vy)
+    if (sp > CONFIG.body.hardSpeedCap) {
+      const f = CONFIG.body.hardSpeedCap / sp
+      vx *= f
+      vy *= f
+    }
+    b.vx = vx
+    b.vy = vy
+  }
+
+  grantSurge(b, r)
+  // The legacy slingshot must not also pay for this pass.
+  b.slingCd = Math.max(b.slingCd, CONFIG.slingshot.cooldown)
+  b.stats.slingshots += 1
+  markPaid(b, r.well.id, world.time)
+  events.push({
+    type: "oberth",
+    bodyId: b.id,
+    wellId: r.well.id,
+    tier: r.tier,
+    moving: r.moving,
+    quality: r.quality,
+    speed: r.speed,
+    x: b.x,
+    y: b.y,
+    surge: b.assist.surge,
+    speedMul: b.assist.surgeMul,
+  })
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -1680,6 +1784,7 @@ function freshBody(world: World, id: string, name: string, color: string, skill:
     ultActive: 0,
     power: { overdrive: 0, magnet: 0, phase: 0 },
     slingCd: 0,
+    assist: emptyAssist(),
     lastHitBy: "",
     lastHitAt: -1e9,
     stats: {
@@ -1768,6 +1873,7 @@ function stepEndless(world: World, nEv: number): void {
       player.power.magnet = 0
       player.power.phase = 0
       player.slingCd = 0
+      resetAssist(player.assist)
       player.lastHitBy = ""
       player.lastHitAt = -1e9
       events.push({ type: "respawn", bodyId: player.id, x: player.x, y: player.y })

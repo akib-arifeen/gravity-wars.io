@@ -12,6 +12,7 @@
 //
 // CONTRACT — exported signatures and documented behaviour are fixed. Helpers go below PRIVATE.
 
+import { emptyAssist } from "./assist"
 import { botIntent, createBotBrain, type BotBrain } from "./bots"
 import { CONFIG } from "./config"
 import { radiusForMass } from "./engine"
@@ -550,6 +551,7 @@ function spawnBody(
     ultActive: 0,
     power: { overdrive: 0, magnet: 0, phase: 0 },
     slingCd: 0,
+    assist: emptyAssist(),
     lastHitBy: "",
     lastHitAt: -1e9,
     skill: opts.skill,

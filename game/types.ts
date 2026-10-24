@@ -72,6 +72,57 @@ export interface BodyStats {
   topSpeed: number
 }
 
+/**
+ * One gravity-assist pass around a well (see assist.ts). A pass opens when the body crosses the
+ * well's assist band while closing on it in the well's own frame, and is graded at periapsis.
+ * "none" is outside every band; "in" is inbound; "out" is after periapsis (or after a dash
+ * reversed the approach).
+ */
+export interface AssistPass {
+  /** Well being tracked, "" outside a pass. */
+  wellId: string
+  stage: "none" | "in" | "out"
+  /** Seconds spent in this pass (aborted past CONFIG.assist.maxPass, so hovering never pays). */
+  t: number
+  /** Current and closest centre distance this pass (u). */
+  dist: number
+  minDist: number
+  /** Radial velocity (relative to the well) at the previous step, u/s; negative = closing. */
+  prevVr: number
+  /** World time of the first dash pressed during this pass, -1 before any. */
+  dashAt: number
+  /** World time periapsis was crossed, -1 before it. */
+  periAt: number
+  /** Centre distance and speed relative to the well at periapsis. */
+  periDist: number
+  periRelSpeed: number
+  /** True once this pass has paid out; a pass pays at most once. */
+  paid: boolean
+}
+
+/** Burn grade. Higher tiers need a deeper periapsis and more speed relative to the well. */
+export type AssistTier = "graze" | "burn" | "oberth"
+
+/**
+ * Gravity-assist ("Oberth burn") state for one body. The speed surge is a temporary ceiling on
+ * thrust-driven speed earned by timing a dash at periapsis — it decays and never stacks past
+ * CONFIG.assist.maxSpeedMul.
+ */
+export interface AssistState {
+  pass: AssistPass
+  /** Seconds until this body may earn another burn. */
+  cd: number
+  /** Well that last paid this body and when (world.time), for the same-well repeat lock. */
+  lastWellId: string
+  lastWellAt: number
+  /** Seconds of surge left and its full duration (0 = no surge). */
+  surge: number
+  surgeFull: number
+  /** Speed-ceiling and thrust multipliers of the surge (1 = none). */
+  surgeMul: number
+  thrustMul: number
+}
+
 /** A player or bot. bodies[0] is always the local player, id "player". */
 export interface Body {
   /** "player" for the local player, "bot-1", "bot-2", ... for bots. */
@@ -116,6 +167,8 @@ export interface Body {
   power: { overdrive: number; magnet: number; phase: number }
   /** Seconds until this body can earn another slingshot. */
   slingCd: number
+  /** Gravity-assist (Oberth burn) tracking and surge. */
+  assist: AssistState
   /** Id of the body whose repulse last hit this one ("" if none) and when (world.time). */
   lastHitBy: string
   lastHitAt: number
@@ -304,6 +357,24 @@ export type GameEvent =
   | { type: "ultEnd"; bodyId: string }
   | { type: "ultReady"; bodyId: string }
   | { type: "slingshot"; bodyId: string; speed: number; x: number; y: number }
+  /**
+   * A real flyby was graded at periapsis and the player's dash landed inside its window: the
+   * Oberth burn. `quality` is 0..1, `speed` the speed relative to the well at periapsis, and
+   * `surge`/`speedMul` the temporary speed ceiling granted.
+   */
+  | {
+      type: "oberth"
+      bodyId: string
+      wellId: string
+      tier: AssistTier
+      moving: boolean
+      quality: number
+      speed: number
+      x: number
+      y: number
+      surge: number
+      speedMul: number
+    }
   | { type: "pickup"; bodyId: string; kind: PowerUpKind; x: number; y: number }
   | { type: "assist"; bodyId: string; victimId: string }
   | { type: "solidHit"; bodyId: string; wellId: string; impulse: number; x: number; y: number }
@@ -419,6 +490,11 @@ export interface HudSnapshot {
   ult: number
   ultActive: number
   power: { overdrive: number; magnet: number; phase: number }
+  /**
+   * Gravity assist: the pass being tracked ("" when none), whether the dash window is open, and
+   * the remaining speed surge. Drives the dash-button glow and the canvas telegraph only.
+   */
+  assist: { wellId: string; stage: "none" | "in" | "out"; window: boolean; surge: number; surgeMul: number }
   /** The cosmic event the HUD should announce, with seconds left in its stage. */
   cosmic: { kind: CosmicKind; stage: "warning" | "active"; secondsLeft: number } | null
   /** True once the arena wall has started closing in. */
