@@ -35,3 +35,27 @@ export function WallIcon({ size = 16 }: { size?: number }) {
     </svg>
   )
 }
+
+export function LockIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="10" width="16" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 018 0v3" />
+    </svg>
+  )
+}
+
+export function StarIcon({ size = 12, filled = false }: { size?: number; filled?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" aria-label={filled ? "earned" : "not earned"}>
+      <path
+        d="M12 2.6l2.9 6 6.6.9-4.8 4.6 1.2 6.5L12 17.5l-5.9 3.1 1.2-6.5L2.5 9.5l6.6-.9z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+        opacity={filled ? 1 : 0.45}
+      />
+    </svg>
+  )
+}

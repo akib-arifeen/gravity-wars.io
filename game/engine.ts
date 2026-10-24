@@ -88,6 +88,9 @@ export interface CreateWorldOptions {
   cosmic?: boolean
   /** Defaults to "round". "endless": see the Endless notes on createWorld and step(). */
   mode?: GameMode
+  /** Mass that wins by critical mass. Defaults to CONFIG.round.criticalMass; campaign levels pass
+   * a value no body can reach so the level ends on its own goal instead of the race. */
+  criticalMass?: number
 }
 
 /**
@@ -148,6 +151,7 @@ export function createWorld(opts: CreateWorldOptions): World {
     countdown: CONFIG.round.countdown,
     time: 0,
     timeLeft: endless ? 1e9 : CONFIG.round.duration,
+    roundCriticalMass: opts.criticalMass ?? CONFIG.round.criticalMass,
     arenaRadius: CONFIG.arena.radius,
     arena,
     arenaBase: CONFIG.arena.radius,
@@ -1181,7 +1185,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     for (const b of bodies) {
       if (!b.alive) continue
       aliveCount++
-      if (b.mass >= CONFIG.round.criticalMass && (!crit || b.mass > crit.mass)) crit = b
+      if (b.mass >= world.roundCriticalMass && (!crit || b.mass > crit.mass)) crit = b
     }
     if (crit) {
       reason = "criticalMass"
@@ -1276,7 +1280,7 @@ export function hudSnapshot(world: World): HudSnapshot {
     mass: p.mass,
     energy: p.energy,
     energyMax: CONFIG.energy.max,
-    criticalMass: CONFIG.round.criticalMass,
+    criticalMass: world.roundCriticalMass,
     rank: rankOf(world, "player"),
     alive,
     total: world.bodies.length,
