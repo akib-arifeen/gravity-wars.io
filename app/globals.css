@@ -1863,3 +1863,670 @@ body {
 .gw-ach-off .gw-ach-desc {
   color: #94a3b6;
 }
+
+/* ---------- campaign: the level picker ---------- */
+
+/* Three modes now: Endless, Round, Campaign. */
+.gw-seg-mode {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.gw-levels {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.gw-level-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 68px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  font: inherit;
+  color: #e8f6ff;
+  background: rgba(232, 246, 255, 0.05);
+  border: 1px solid rgba(232, 246, 255, 0.16);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.gw-level-btn[data-on="1"] {
+  background: rgba(94, 242, 255, 0.16);
+  border-color: #5ef2ff;
+}
+
+.gw-level-btn[data-won="1"] {
+  border-color: rgba(123, 237, 159, 0.55);
+}
+
+.gw-level-btn[data-won="1"] .gw-level-no {
+  color: #7bed9f;
+}
+
+.gw-level-btn:disabled {
+  cursor: default;
+  color: rgba(232, 246, 255, 0.45);
+  background: rgba(232, 246, 255, 0.02);
+  border-color: rgba(232, 246, 255, 0.08);
+}
+
+.gw-level-btn:focus-visible {
+  outline: 3px solid #5ef2ff;
+  outline-offset: 2px;
+}
+
+.gw-level-no {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-level-name {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.gw-level-sub {
+  font-size: 10px;
+  color: rgba(232, 246, 255, 0.6);
+  text-align: center;
+}
+
+.gw-goal-line {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #5ef2ff;
+}
+
+@media (max-width: 479px) {
+  .gw-levels {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ---------- Phase B2: campaign, daily, boss, feed, share ---------- */
+
+/* Canvas overlay for in-world markers (boss telegraphs, the hidden relic). */
+.gw-overlay-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Screen-reader-only live context (daily record, skin unlock). */
+.gw-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Four modes: Endless, Round, Campaign, Daily. */
+.gw-seg-mode {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.gw-seg-mode .gw-seg-btn {
+  padding: 8px 2px;
+}
+
+.gw-seg-mode .gw-seg-name {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* Campaign level picker: 12 levels, a sector row at a time. */
+.gw-levels {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.gw-level-btn {
+  min-height: 62px;
+  padding: 5px 3px;
+}
+
+.gw-level-btn[data-sector="2"] {
+  background: rgba(199, 125, 255, 0.06);
+}
+
+.gw-level-btn[data-sector="3"] {
+  background: rgba(255, 123, 213, 0.06);
+}
+
+.gw-level-btn[data-boss="1"] {
+  border-color: rgba(255, 123, 213, 0.5);
+}
+
+.gw-level-btn[data-boss="1"] .gw-level-name {
+  color: #ffc6ea;
+}
+
+.gw-level-name {
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+.gw-stars {
+  display: inline-flex;
+  gap: 1px;
+  align-items: center;
+}
+
+.gw-star-on {
+  color: #ffd166;
+}
+
+.gw-star-off {
+  color: rgba(232, 246, 255, 0.25);
+}
+
+.gw-goal-box {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(94, 242, 255, 0.05);
+  border: 1px solid rgba(94, 242, 255, 0.14);
+}
+
+.gw-goal-box .gw-goal-line {
+  margin: 0;
+}
+
+.gw-bonus-line {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffd166;
+}
+
+.gw-goal-box .gw-arena-blurb {
+  margin-bottom: 0;
+}
+
+.gw-ability-track {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.gw-ability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(232, 246, 255, 0.62);
+  background: rgba(232, 246, 255, 0.04);
+  border: 1px solid rgba(232, 246, 255, 0.12);
+}
+
+.gw-ability-chip.gw-ability-on {
+  color: #5ef2ff;
+  border-color: rgba(94, 242, 255, 0.55);
+  background: rgba(94, 242, 255, 0.12);
+}
+
+.gw-ability-req {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  /* Muted text token: 0.45 fell just under 4.5:1 on the chip's tinted panel background. */
+  color: rgba(232, 246, 255, 0.7);
+}
+
+.gw-daily-card {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(94, 242, 255, 0.05);
+  border: 1px solid rgba(94, 242, 255, 0.16);
+}
+
+.gw-daily-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.gw-daily-date {
+  font-size: 15px;
+  font-weight: 800;
+  color: #5ef2ff;
+}
+
+.gw-daily-arena {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(232, 246, 255, 0.8);
+  text-transform: capitalize;
+}
+
+.gw-daily-line {
+  margin: 6px 0 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(232, 246, 255, 0.75);
+}
+
+.gw-daily-stats {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-daily-stats strong {
+  display: block;
+  font-size: 16px;
+  color: #e8f6ff;
+}
+
+.gw-daily-seed {
+  margin: 8px 0 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: rgba(232, 246, 255, 0.62);
+}
+
+/* Boss bar: top centre, under the HUD centre block. */
+.gw-boss {
+  position: absolute;
+  top: calc(76px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(340px, calc(100vw - 150px));
+  padding: 6px 10px 7px;
+  border-radius: 10px;
+  background: rgba(12, 4, 22, 0.72);
+  border: 1px solid rgba(255, 123, 213, 0.4);
+  text-align: left;
+}
+
+.gw-boss-warn {
+  border-color: #ff4d6d;
+  animation: gw-boss-pulse 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes gw-boss-pulse {
+  from {
+    box-shadow: 0 0 0 rgba(255, 77, 109, 0);
+  }
+  to {
+    box-shadow: 0 0 18px rgba(255, 77, 109, 0.55);
+  }
+}
+
+.gw-boss-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.gw-boss-name {
+  color: #ffc6ea;
+  text-transform: uppercase;
+}
+
+.gw-boss-mass {
+  color: rgba(232, 246, 255, 0.7);
+  letter-spacing: 0.04em;
+}
+
+.gw-boss-bar {
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 4px;
+  background: rgba(232, 246, 255, 0.14);
+  overflow: hidden;
+}
+
+.gw-boss-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ff4d6d, #ff7bd5);
+  transition: width 0.2s ease-out;
+}
+
+.gw-boss-phase {
+  margin-top: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: rgba(255, 198, 234, 0.95);
+}
+
+/* Activity feed: what is happening in the arena. */
+.gw-feed {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.25;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+}
+
+.gw-feed-desktop {
+  right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  width: 280px;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.gw-feed-touch {
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(148px + env(safe-area-inset-bottom, 0px));
+  width: min(320px, 76vw);
+  align-items: center;
+  text-align: center;
+  font-size: 11px;
+}
+
+.gw-feed-line {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(6, 10, 24, 0.5);
+  color: rgba(232, 246, 255, 0.82);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gw-feed-you {
+  color: #5ef2ff;
+  font-weight: 700;
+}
+
+.gw-feed-kill {
+  color: #ffc6ea;
+}
+
+.gw-feed-death {
+  color: #ff8d9f;
+}
+
+.gw-feed-join {
+  color: #7bed9f;
+}
+
+.gw-feed-leave {
+  color: rgba(232, 246, 255, 0.68);
+}
+
+.gw-feed-event {
+  color: #ffd166;
+}
+
+/* Locked abilities (campaign progression). */
+.gw-slot[data-locked="1"] {
+  opacity: 0.55;
+  cursor: default;
+  color: rgba(232, 246, 255, 0.5);
+}
+
+.gw-slot[data-locked="1"] .gw-slot-key {
+  color: rgba(232, 246, 255, 0.45);
+}
+
+.gw-abtn[data-locked="1"] {
+  opacity: 0.5;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-abtn[data-locked="1"] .gw-abtn-label {
+  color: rgba(232, 246, 255, 0.55);
+}
+
+/* End screen: stars, the goal checklist, the unlock card and the daily result. */
+.gw-end-stars {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 2px 0 6px;
+  color: #ffd166;
+}
+
+.gw-end-level {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(232, 246, 255, 0.85);
+  letter-spacing: 0.04em;
+}
+
+.gw-checklist {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(232, 246, 255, 0.55);
+}
+
+.gw-checklist li::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(232, 246, 255, 0.35);
+  vertical-align: 1px;
+}
+
+.gw-checklist li[data-on="1"] {
+  color: #e8f6ff;
+}
+
+.gw-checklist li[data-on="1"]::before {
+  background: #7bed9f;
+  border-color: #7bed9f;
+}
+
+.gw-new-best {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #ffd166;
+}
+
+.gw-unlock {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(94, 242, 255, 0.09);
+  border: 1px solid rgba(94, 242, 255, 0.5);
+  animation: gw-pop 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+
+.gw-unlock-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: #5ef2ff;
+}
+
+.gw-unlock-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  align-items: flex-start;
+  color: #e8f6ff;
+}
+
+.gw-unlock-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(94, 242, 255, 0.16);
+  color: #5ef2ff;
+  flex: none;
+}
+
+.gw-unlock-row strong {
+  display: block;
+  font-size: 14px;
+}
+
+.gw-unlock-desc {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(232, 246, 255, 0.7);
+}
+
+.gw-daily-result {
+  margin: 4px 0 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(94, 242, 255, 0.06);
+  border: 1px solid rgba(94, 242, 255, 0.18);
+}
+
+.gw-daily-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.gw-daily-score-value {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
+  color: #5ef2ff;
+}
+
+.gw-daily-score-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-share-btn {
+  margin-top: 8px;
+}
+
+@media (max-width: 479px) {
+  .gw-levels {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .gw-level-name {
+    font-size: 10px;
+  }
+
+  .gw-boss {
+    top: calc(70px + env(safe-area-inset-top, 0px));
+    width: calc(100vw - 96px);
+  }
+
+  .gw-daily-score-value {
+    font-size: 28px;
+  }
+}
+
+@media (max-height: 600px) {
+  .gw-level-btn {
+    min-height: 52px;
+  }
+
+  .gw-goal-box {
+    padding: 6px 8px;
+  }
+}
+
+/* Campaign HUD: the goal line wraps under the level clock. */
+.gw-hud-goal {
+  margin-top: 2px;
+  max-width: min(520px, 86vw);
+  margin-left: auto;
+  margin-right: auto;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: rgba(232, 246, 255, 0.85);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.85);
+}
+
+/* A boss encounter owns the top centre: the cosmic banner moves below the boss bar. */
+@media (min-width: 760px) {
+  .gw-hud:has(.gw-boss) .gw-cosmic {
+    top: calc(160px + env(safe-area-inset-top, 0px));
+  }
+}
+
+.gw-boss {
+  z-index: 2;
+}
+
+/* Narrow phones: stack the HUD instead of overlapping it. The centre block owns the top strip
+   (level, clock, goal); a boss bar sits under it; the mass/energy panel drops below that. */
+@media (max-width: 519px) {
+  .gw-hud-leftcol {
+    top: calc(80px + env(safe-area-inset-top, 0px));
+  }
+
+  .gw-hud:has(.gw-boss) .gw-hud-leftcol {
+    top: calc(140px + env(safe-area-inset-top, 0px));
+  }
+
+  .gw-hud-tag {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+  }
+
+  .gw-hud-goal {
+    font-size: 11px;
+    max-width: 92vw;
+  }
+
+  /* Leave the top-right corner free for the touch layout's minimap. */
+  .gw-boss {
+    top: calc(74px + env(safe-area-inset-top, 0px));
+    left: calc(12px + env(safe-area-inset-left, 0px));
+    transform: none;
+    width: calc(100vw - 150px);
+    max-width: none;
+  }
+
+  .gw-boss-name {
+    font-size: 10px;
+  }
+
+  .gw-boss-head {
+    font-size: 10px;
+  }
+}

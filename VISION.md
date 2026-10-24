@@ -25,24 +25,24 @@ Sources:
 | Multiplayer | Real-time multiplayer battles | missing | The `Intent` seam exists, and `step()` can run on a server unchanged. |
 | Multiplayer | Global leaderboard | missing | Needs hosting (Phase C). |
 | Multiplayer | Custom game rooms | missing | Needs hosting (Phase C). |
-| Story | Single-player campaign | missing | Phase B. |
-| Story | Unique boss battles | missing | Phase B. |
-| Story | Character progression system | missing | Phase B (unlocks, from campaign stars). |
-| Story | Unlockable abilities and upgrades | missing | Abilities come in Phase A; unlocking them is Phase B. |
-| Story | Rich narrative with cosmic lore | missing | Phase B, as short briefings between levels. |
+| Story | Single-player campaign | done | Phase B: "The Long Fall", twelve levels in three sectors (campaign.ts). |
+| Story | Unique boss battles | done | Phase B: the Leviathan (splits), the Twin Pulsars (sweeping beams) and the Void King (collapse). A boss is a body driven through the normal Intent seam, so the engine is unchanged. |
+| Story | Character progression system | done | Phase B: stars per level (goal, bonus, relic); Dash at 1 star, Repulse at 3, Singularity at 6. |
+| Story | Unlockable abilities and upgrades | done | Phase B: the campaign gates Dash, Repulse and the Singularity; Endless and Round keep everything unlocked. |
+| Story | Rich narrative with cosmic lore | done | Phase B: a two-sentence briefing per level and a line per sector. |
 | Levels | Multiple themed arenas | done | Classic, Binary, The Maw, Nebula Field and The Belt (Phase A). |
 | Levels | Dynamic environmental hazards | done | Orbiting stars and planets, a sweeping pulsar beam, solar flares, gravity storms, the closing wall (Phase A). |
 | Levels | Special gravity zones | done | Nebula drag clouds, repulsor fields and quantum anomalies (Phase A). |
-| Levels | Hidden collectibles | missing | Phase B (relics per level). |
+| Levels | Hidden collectibles | done | Phase B: one hidden relic per campaign level, tracked on screen and off screen; collecting all twelve unlocks the Voidtouched skin. |
 | Levels | Progressive difficulty scaling | partial | Three difficulties; in-round escalation; Endless skill drifts with your mass (Phase A). Across levels comes with the campaign (Phase B). |
 | Gameplay | New power-up types | done | Phase A. |
 | Gameplay | Advanced gravity mechanics | done | Slingshots, orbiting wells, repulse shoves into stars, pulsar beams (Phase A). |
 | Gameplay | Special abilities and ultimate moves | done | Pull, Dash, Repulse and the Singularity ultimate (Phase A). |
-| Gameplay | Team-based game modes | missing | Against bots in Phase B; against humans in Phase C. |
+| Gameplay | Team-based game modes | missing | Not built: against bots it needs a team-aware bot brain and a soloable team objective; against humans it belongs to Phase C. |
 | Social | Player profiles and statistics | partial | Local lifetime stats and an Endless best (Phase A); online profiles need hosting. |
 | Social | Achievement system | done | 23 local achievements with toasts (Phase A). |
-| Social | Daily challenges | missing | Phase B, seeded by the date, with no backend. |
-| Social | Social media integration | missing | Phase B: a share card through the Web Share API or copied text. Client only. |
+| Social | Daily challenges | done | Phase B: seeded by the UTC date (arena, rival roster, cosmic events), local best and day streak. |
+| Social | Social media integration | done | Phase B: a text share card through the Web Share API, clipboard fallback. Client only. |
 | Social | Community events | missing | Phase C (needs a server). |
 
 ## 2. Mechanics sketched in the prototype code
@@ -124,7 +124,27 @@ Gate:
 - browser playtests at desktop and 390 px;
 - 60 fps with 0 frames over 20 ms on Hard at DPR 2, plus a CPU-throttled mid-phone profile.
 
-### Phase B: campaign and daily challenge (no server)
+### Phase B: campaign and daily challenge (no server) — built
+
+Status: built in `game/campaign.ts`, `game/boss.ts`, `game/daily.ts` and `game/share.ts`, with the
+shell wiring in `app/`. Where the build differs from the sketch below, the shipped behaviour is:
+- Twelve levels across three sectors: sector I (Descent), sector II (The Signal), sector III
+  (The Void). Each sector ends in a boss (levels 4, 8 and 12).
+- Goal kinds: reach a mass, absorb N rivals, earn N slingshots, recover the relic, survive the
+  clock, win the critical-mass race, be the last body standing. "Get to X" goals end the level the
+  moment they are met; timer and win-condition goals are decided by the engine.
+- Stars: one for the goal, one for the level's bonus objective (time, mass, absorbs, slingshots or
+  assists) and one for the level's relic. Stars are additive and the best count is kept.
+- Bosses reuse the body/physics model: a boss is an ordinary Body driven through the `Intent`
+  seam, and its telegraphed specials (gravity maw, collapse, lunge) run in the shell around the
+  fixed step. The player damages a boss by landing Repulses on it (the wound is permanent: the
+  boss cannot regrow past the damage), then eats it once heavy enough. Boss levels are duels
+  (plus the Leviathan's split fragments), not a field of rivals.
+- The daily challenge uses a fixed seed per UTC date, so the arena, rival roster and cosmic
+  schedule are identical for everyone that day. Score = the run's peak mass; local best and streak.
+- The share card is text only: Web Share API when available, clipboard otherwise.
+
+Original sketch:
 
 1. **Campaign: "The Long Fall".**
    - 12 handcrafted levels across 3 sectors, each with an objective: reach a mass, survive N seconds, absorb a named rival, collect hidden relics, escape through a wormhole.
@@ -139,6 +159,11 @@ Gate:
 5. **Daily challenge.** It is seeded by the UTC date: arena, modifiers and rival roster. The best score is kept locally, and a share card goes out through the Web Share API or copied text.
 
 Gate: every level can be completed by a scripted bot run, so none are unwinnable; plus the same browser, fps and test gates as Phase A.
+
+Phase B gate evidence: `game/__tests__/campaign-sim.test.ts` runs all twelve levels to their end with
+a scripted pilot (a hard bot brain plus objective overrides: chase the boss, repulse it when it is
+too big to eat, fly to the relic) and asserts every level's goal is met; it logs a per-level table
+with the pilot's finish time, peak mass and boss state.
 
 ### Phase C: online (needs hosting; the costed choice comes before any account)
 
