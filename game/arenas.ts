@@ -8,7 +8,7 @@ import { CONFIG } from "./config"
 import { rand, randRange } from "./rng"
 import type { ArenaId, Vec, Well, WellKind, World, Zone } from "./types"
 
-export const ARENA_IDS: readonly ArenaId[] = ["classic", "binary", "maw", "nebula", "belt"]
+export const ARENA_IDS: readonly ArenaId[] = ["classic", "binary", "maw", "nebula", "belt", "vast"]
 
 export interface ArenaInfo {
   id: ArenaId
@@ -23,6 +23,7 @@ export const ARENAS: Readonly<Record<ArenaId, ArenaInfo>> = {
   maw: { id: "maw", name: "The Maw", blurb: "One enormous black hole. Feed it, or feed on it." },
   nebula: { id: "nebula", name: "Nebula Field", blurb: "Thick drag clouds and a sweeping pulsar." },
   belt: { id: "belt", name: "The Belt", blurb: "A dense asteroid ring with orbiting planets." },
+  vast: { id: "vast", name: "The Vast", blurb: "A red supergiant, a wide asteroid belt, and the long dark beyond." },
 }
 
 /** Where debris spawns: uniform over the disc, or concentrated in an annulus. */
@@ -63,6 +64,14 @@ export interface DebrisField {
  * - belt: one star at the centre; two planets orbiting it at r 650 and 1250 (w 2π/50 and
  *   -2π/80, random phases); one station at r 950. One wormhole pair. arenaBase 2000, spawn
  *   ring 1600 (outside the outer planet's path, clear of the wall warning band). Field: ringShare 0.65, ring 850..1150.
+ * - vast: the oversized arena. One giant central star (CONFIG.vast star values: radius 360 and a
+ *   deliberately lower gm than its size implies), two solid planets orbiting it at r 2000
+ *   (w 2π/90) and 3050 (w -2π/120) with random phases, two white dwarfs on opposite sides of the
+ *   outer reach at r 4200, one wormhole pair in the middle field, one dust-lane nebula (r 2450,
+ *   radius 640, drag CONFIG.vast.dustLane.drag), one quantum anomaly opposite it (r 1350, radius
+ *   240), and two repulsor fields at r 4240 perpendicular to the white dwarfs' axis (radius 330,
+ *   strength CONFIG.zones.repulsorAccel). arenaBase 4800, spawn ring 3300. Field: ringShare 0.7,
+ *   ring 1200..3200.
  * Ids: kind + "-" + 1-based index per kind, except black holes use "hole" ("star-1", "hole-1",
  * "planet-2", "station-1"...);
  * zone ids "zone-1", ...
@@ -182,7 +191,7 @@ export function buildArena(world: World, arena: ArenaId): { ringRadius: number; 
       }
       addZone(world, "repulsor", p.x, p.y, 220, CONFIG.zones.repulsorAccel)
     }
-  } else {
+  } else if (arena === "belt") {
     // belt
     base = 2000
     ringRadius = 1600
@@ -195,6 +204,45 @@ export function buildArena(world: World, arena: ArenaId): { ringRadius: number; 
     const sa = randRange(world, 0, TWO_PI)
     addFixed(world, "station", Math.cos(sa) * 950, Math.sin(sa) * 950)
     placeWormholePair(world)
+  } else {
+    // vast: bigger in every dimension, but the giant star's gm is tuned low so its reach is not
+    // overwhelming. Draw order: five anchor draws, then the wormhole pair, then the zones.
+    const V = CONFIG.vast
+    base = V.arenaRadius
+    ringRadius = V.spawnRing
+    world.arenaBase = base
+    world.arenaRadius = base
+    field = { ringShare: V.beltShare, ringInner: V.beltInner, ringOuter: V.beltOuter }
+    const star = addStar(world, 0, 0)
+    star.gm = V.starGm
+    star.radius = V.starRadius
+    star.chargeRadius = V.starChargeRadius
+    star.chargeRate = V.starChargeRate
+    const phases = [randRange(world, 0, TWO_PI), randRange(world, 0, TWO_PI)]
+    addOrbiter(world, "planet", 0, 0, V.planetInnerOrbit, TWO_PI / 90, phases[0])
+    addOrbiter(world, "planet", 0, 0, V.planetOuterOrbit, -TWO_PI / 120, phases[1])
+    const outerAxis = randRange(world, 0, TWO_PI)
+    addFixed(world, "whitedwarf", Math.cos(outerAxis) * V.remnantOrbit, Math.sin(outerAxis) * V.remnantOrbit)
+    addFixed(world, "whitedwarf", Math.cos(outerAxis + Math.PI) * V.remnantOrbit, Math.sin(outerAxis + Math.PI) * V.remnantOrbit)
+    placeWormholePair(world)
+    // Dust lane: the planets move, so choose an angle clear of both of their time-0 positions.
+    const dl = V.dustLane
+    let dust: Vec = { x: dl.orbit, y: 0 }
+    for (let tries = 0; tries < 200; tries++) {
+      const a = randRange(world, 0, TWO_PI)
+      dust = { x: Math.cos(a) * dl.orbit, y: Math.sin(a) * dl.orbit }
+      if (dl.orbit + dl.radius > ringRadius - 120) continue
+      if (clearOfWells(world, dust.x, dust.y, dl.radius)) break
+    }
+    addZone(world, "nebula", dust.x, dust.y, dl.radius, dl.drag)
+    const an = V.anomaly
+    const anomalyAngle = Math.atan2(dust.y, dust.x) + Math.PI
+    addZone(world, "anomaly", Math.cos(anomalyAngle) * an.orbit, Math.sin(anomalyAngle) * an.orbit, an.radius, CONFIG.zones.anomalyUlt)
+    const rp = V.repulsor
+    for (let i = 0; i < 2; i++) {
+      const a = outerAxis + Math.PI / 2 + Math.PI * i
+      addZone(world, "repulsor", Math.cos(a) * rp.orbit, Math.sin(a) * rp.orbit, rp.radius, CONFIG.zones.repulsorAccel)
+    }
   }
   return { ringRadius, field }
 }
@@ -209,8 +257,9 @@ export function buildArena(world: World, arena: ArenaId): { ringRadius: number; 
  * buildArena and by the wormhole storm in cosmic.ts.
  */
 export function placeWormholePair(world: World): void {
-  const maxDist = Math.min(CONFIG.wormhole.orbit[1], world.arenaRadius - 200)
-  const minDist = Math.min(CONFIG.wormhole.orbit[0], maxDist)
+  const orbit = world.arena === "vast" ? CONFIG.vast.wormholeOrbit : CONFIG.wormhole.orbit
+  const maxDist = Math.min(orbit[1], world.arenaRadius - 200)
+  const minDist = Math.min(orbit[0], maxDist)
   const pos: Vec[] = []
   for (let n = 0; n < 2; n++) {
     let x = 0

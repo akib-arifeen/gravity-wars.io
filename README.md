@@ -32,6 +32,7 @@ Pick one on the menu, or choose Random:
 | The Maw | One enormous black hole, white dwarfs, and recharge stations |
 | Nebula Field | Drag clouds, a repulsor field, and a pulsar whose beams sweep the arena |
 | The Belt | A dense asteroid ring and planets on orbits |
+| The Vast | A red supergiant, a wide belt, outer remnants and the long dark beyond |
 
 ## How to play
 

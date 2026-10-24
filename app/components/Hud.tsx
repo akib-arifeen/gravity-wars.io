@@ -1,13 +1,15 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { CONFIG } from "@/game/config"
 import { ARENAS } from "@/game/arenas"
 import { bossAnnouncement, bossPhaseText, type BossHud } from "@/game/boss"
 import { COSMIC_INFO } from "@/game/cosmic"
 import { FEED_MAX, type FeedItem, type FeedView } from "@/game/feed"
 import type { AbilityId } from "@/game/campaign"
+import type { LeaderboardEntry } from "@/game/types"
 import { AbilityIcon, LockIcon, WallIcon } from "./Icons"
+import { centreHud, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, type HudMode } from "./hudView"
 
 /** Campaign context the HUD shows: the level badge and its goal. */
 export interface CampaignHud {
@@ -37,13 +39,6 @@ interface HudProps {
   campaign?: CampaignHud | null
   /** Campaign abilities not earned yet: shown locked instead of pressable. */
   lockedAbilities?: readonly AbilityId[]
-}
-
-function formatTime(s: number): string {
-  const t = Math.max(0, Math.ceil(s))
-  const m = Math.floor(t / 60)
-  const r = t % 60
-  return `${m}:${r < 10 ? "0" : ""}${r}`
 }
 
 function PauseIcon() {
@@ -82,6 +77,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const prevRespawn = useRef(0)
   const prevPhase = useRef<string | null>(null)
   const prevEscalating = useRef(false)
+  const pillRef = useRef<HTMLButtonElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
 
   const phase = hud?.phase ?? null
   useEffect(() => {
@@ -122,6 +119,41 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
       if (timer) clearTimeout(timer)
     }
   }, [escalating])
+
+  // A respawn overlay owns the screen; the board would sit on top of it.
+  useEffect(() => {
+    if (respawnIn > 0) setLbOpen(false)
+  }, [respawnIn])
+
+  const closeLb = useCallback(() => {
+    setLbOpen(false)
+    pillRef.current?.focus()
+  }, [])
+
+  // Escape closes the board rather than pausing: capture, so the shell's window handler never sees it.
+  useEffect(() => {
+    if (!lbOpen) return
+    closeRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (!dismissesLeaderboard(e.key, lbOpen)) return
+      e.preventDefault()
+      e.stopPropagation()
+      closeLb()
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [lbOpen, closeLb])
+
+  const mode: HudMode = ed ? "endless" : campaign ? "campaign" : "round"
+  const centre = centreHud(mode, layout, {
+    timeLeft: hud?.timeLeft ?? 0,
+    rank: hud?.rank ?? 0,
+    alive: hud?.alive ?? 0,
+    arenaName: hud ? ARENAS[hud.arena].name : "",
+    campaign: campaign
+      ? { index: campaign.index, total: campaign.total, name: campaign.name, goalLine: campaign.goalLine }
+      : null,
+  })
 
   const massPct = hud ? Math.min(100, (hud.mass / hud.criticalMass) * 100) : 0
   const energyPct = hud ? Math.min(100, Math.max(0, (hud.energy / hud.energyMax) * 100)) : 0
@@ -190,7 +222,7 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const bossAnnounce = bossActive && boss ? bossAnnouncement(boss) : ""
 
   return (
-    <div className="gw-hud" inert={inert}>
+    <div className="gw-hud" data-mode={mode} inert={inert}>
       {hud && (
         <>
           <div className="gw-hud-leftcol">
@@ -242,49 +274,41 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
           </div>
 
           <div className="gw-hud-center">
-            {ed ? (
-              <>
-                <div className="gw-hud-tag">ENDLESS</div>
-                <div className="gw-hud-arena">{ARENAS[hud.arena].name}</div>
-                {layout === "touch" && hud.leaderboard.length > 0 && (
-                  <button
-                    type="button"
-                    className="gw-lb-pill"
-                    aria-expanded={lbOpen}
-                    aria-label="Leaderboard"
-                    onClick={() => setLbOpen((o) => !o)}
-                  >
-                    {hud.rank > 0 ? `#${hud.rank} / ${hud.alive}` : "Out"}
-                    {escalating && (
-                      <span className="gw-wall-icon">
-                        <WallIcon size={14} />
-                      </span>
-                    )}
-                  </button>
+            {centre.tag && <div className="gw-hud-tag">{centre.tag}</div>}
+            {centre.arena && <div className="gw-hud-arena">{centre.arena}</div>}
+            {layout === "touch" && ed && hud.leaderboard.length > 0 && (
+              <button
+                ref={pillRef}
+                type="button"
+                className="gw-lb-pill"
+                aria-expanded={lbOpen}
+                aria-controls="gw-lb-panel"
+                aria-label={rankPillLabel(hud.rank, hud.alive)}
+                onClick={() => setLbOpen((o) => !o)}
+              >
+                {rankPill(hud.rank, hud.alive)}
+                {escalating && (
+                  <span className="gw-wall-icon">
+                    <WallIcon size={14} />
+                  </span>
                 )}
-              </>
-            ) : campaign ? (
-              <>
-                <div className="gw-hud-tag">
-                  LEVEL {campaign.index} / {campaign.total} &middot; {campaign.name.toUpperCase()}
-                </div>
-                <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{formatTime(hud.timeLeft)}</div>
-              </>
-            ) : (
-              <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{formatTime(hud.timeLeft)}</div>
+              </button>
             )}
-            {campaign ? (
-              <div className="gw-hud-goal">{campaign.goalLine}</div>
-            ) : (
+            {centre.timer && (
+              <div className={`gw-hud-timer${timeCritical ? " gw-hud-timer-crit" : ""}`}>{centre.timer}</div>
+            )}
+            {centre.goal ? (
+              <div className="gw-hud-goal">{centre.goal}</div>
+            ) : centre.rank ? (
               <div className={`gw-hud-rank${ed ? " gw-hud-rank-ed" : ""}`}>
-                {ed ? (hud.rank > 0 ? `Rank ${hud.rank} / ${hud.alive}` : "Eliminated") : `Rank ${hud.rank} / ${hud.alive}`}
+                {centre.rank}
                 {escalating && !wallBanner && (
                   <span className="gw-wall-icon" role="img" aria-label="The wall is closing" title="The wall is closing">
                     <WallIcon />
                   </span>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
 
           {bossActive && boss && <BossBar boss={boss} />}
@@ -298,8 +322,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
             <Leaderboard rows={hud.leaderboard} touch={layout === "touch"} open={lbOpen} onToggle={() => setLbOpen((o) => !o)} />
           )}
 
-          {ed && hud.leaderboard.length > 0 && layout === "touch" && (
-            <Leaderboard rows={hud.leaderboard} touch open={lbOpen} drop onToggle={() => setLbOpen((o) => !o)} />
+          {ed && hud.leaderboard.length > 0 && layout === "touch" && lbOpen && (
+            <LeaderboardPanel rows={hud.leaderboard} closeRef={closeRef} onClose={closeLb} />
           )}
 
           {feed && feed.length > 0 && <Feed items={feed} layout={layout} />}
@@ -437,48 +461,29 @@ function Leaderboard({
   rows,
   touch,
   open,
-  drop = false,
   onToggle,
 }: {
-  rows: import("@/game/types").LeaderboardEntry[]
+  rows: LeaderboardEntry[]
   touch: boolean
   open: boolean
-  /** Dropdown variant for short landscape screens (opened from the rank pill). */
-  drop?: boolean
   onToggle(): void
 }) {
-  const you = rows.find((r) => r.isPlayer)
-  // Touch shows a compact top 3 plus the player; a tap expands to the full board.
-  let shown = rows
-  if (touch && !open) {
-    shown = rows.slice(0, 3)
-    if (you && !shown.includes(you)) shown = [...shown, you]
-  }
+  // Touch shows a compact top 3 plus the player; a tap expands to the full board. Phones hide this
+  // box and open the panel below from the rank pill instead.
+  const shown = leaderboardRows(rows, { touch, open })
   const body = (
     <>
       <div className="gw-lb-head">
         <span>LEADERBOARD</span>
         {touch && <span className="gw-lb-more">{open ? "less" : "more"}</span>}
       </div>
-      <ol className="gw-lb-list">
-        {shown.map((r, i) => (
-          <li
-            key={r.id}
-            className={`${r.isPlayer ? "gw-lb-you" : ""}${i > 0 && r.rank - shown[i - 1].rank > 1 ? " gw-lb-gap" : ""}`}
-          >
-            <span className="gw-lb-rank">{r.rank}</span>
-            <span className="gw-dot" style={{ background: r.color }} />
-            <span className="gw-lb-name">{r.name}</span>
-            <span className="gw-lb-mass">{Math.round(r.mass)}</span>
-          </li>
-        ))}
-      </ol>
+      <LeaderboardRows rows={shown} />
     </>
   )
   return touch ? (
     <button
       type="button"
-      className={`gw-lb ${drop ? "gw-lb-drop" : "gw-lb-touch"}`}
+      className="gw-lb gw-lb-touch"
       data-open={open ? "1" : undefined}
       aria-expanded={open}
       aria-label="Leaderboard"
@@ -490,5 +495,46 @@ function Leaderboard({
     <div className="gw-lb" aria-label="Leaderboard">
       {body}
     </div>
+  )
+}
+
+/** Phone: the rank pill opens this panel, the only place the full board appears. */
+function LeaderboardPanel({
+  rows,
+  closeRef,
+  onClose,
+}: {
+  rows: LeaderboardEntry[]
+  closeRef: RefObject<HTMLButtonElement | null>
+  onClose(): void
+}) {
+  return (
+    <div id="gw-lb-panel" className="gw-lb gw-lb-drop" data-open="1" role="dialog" aria-label="Leaderboard">
+      <div className="gw-lb-head">
+        <span>LEADERBOARD</span>
+        <button ref={closeRef} type="button" className="gw-lb-close" aria-label="Close leaderboard" onClick={onClose}>
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+      <LeaderboardRows rows={rows} />
+    </div>
+  )
+}
+
+function LeaderboardRows({ rows }: { rows: LeaderboardEntry[] }) {
+  return (
+    <ol className="gw-lb-list">
+      {rows.map((r, i) => (
+        <li
+          key={r.id}
+          className={`${r.isPlayer ? "gw-lb-you" : ""}${i > 0 && r.rank - rows[i - 1].rank > 1 ? " gw-lb-gap" : ""}`}
+        >
+          <span className="gw-lb-rank">{r.rank}</span>
+          <span className="gw-dot" style={{ background: r.color }} />
+          <span className="gw-lb-name">{r.name}</span>
+          <span className="gw-lb-mass">{Math.round(r.mass)}</span>
+        </li>
+      ))}
+    </ol>
   )
 }

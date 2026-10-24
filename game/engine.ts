@@ -110,9 +110,12 @@ export interface CreateWorldOptions {
  *    starChargeRate, lethal. Hole: gm holeGm, radius holeRadius, chargeRadius 0, chargeRate 0, lethal.
  * 2. Bodies: player first (id "player", kind "player", CONFIG.player name/colour, mass
  *    startMass), then bots "bot-1".."bot-N" (names/colours from CONFIG.bots in order, mass
- *    startMass * a draw in the difficulty's startMassScale), evenly spaced on the returned ring
- *    radius with one random rotation for the whole ring. Velocity 0, px/py = x/y, energy max,
- *    shield CONFIG.body.spawnShield, all timers/cooldowns/ult 0, power all 0, lastHitBy "",
+ *    startMass * a draw in the difficulty's startMassScale), on the returned ring radius with one
+ *    random rotation for the whole ring. Classic and every arena except the Vast spread them evenly
+ *    around the ring, player first. The Vast uses CONFIG.vast.spawnGroup instead: `size` bodies in
+ *    a row `gap` apart along the ring tangent, groups evenly spaced by anchor angle. Velocity 0,
+ *    px/py = x/y, energy max, shield CONFIG.body.spawnShield, all timers/cooldowns/ult 0, power
+ *    all 0, lastHitBy "",
  *    lastHitAt -1e9, flags false, stats all 0 with peakMass = mass, alive true.
  * 3. Debris: CONFIG.debris.target dust/rock and CONFIG.crystal.target crystals placed per the
  *    debris field (see step 11's placement rule), never within well.radius +
@@ -150,7 +153,7 @@ export function createWorld(opts: CreateWorldOptions): World {
     phase: "countdown",
     countdown: CONFIG.round.countdown,
     time: 0,
-    timeLeft: endless ? 1e9 : CONFIG.round.duration,
+    timeLeft: endless ? 1e9 : CONFIG.round.duration * (arena === "vast" ? CONFIG.vast.roundMul : 1),
     roundCriticalMass: opts.criticalMass ?? CONFIG.round.criticalMass,
     arenaRadius: CONFIG.arena.radius,
     arena,
@@ -180,15 +183,24 @@ export function createWorld(opts: CreateWorldOptions): World {
   // 2. Bodies on a ring.
   const total = botCount + 1
   const ringRot = randRange(world, 0, TWO_PI)
+  // The Vast is 5.76x classic's area, so an evenly spread roster would start far outside every
+  // bot's hunt range (see CONFIG.vast.spawnGroup). Vast bodies open in clusters instead; the draw
+  // order is unchanged, so the same seed keeps the same arena, masses and skills.
+  const group = arena === "vast" ? CONFIG.vast.spawnGroup : null
+  const anchors = group ? Math.ceil(total / group.size) : total
   for (let i = 0; i < total; i++) {
-    const angle = ringRot + (TWO_PI * i) / total
+    const slot = group ? i % group.size : 0
+    const groupStart = i - slot
+    const groupSize = group ? Math.min(group.size, total - groupStart) : 1
+    const angle = ringRot + (TWO_PI * (group ? groupStart / group.size : i)) / anchors
+    const along = group ? (slot - (groupSize - 1) / 2) * group.gap : 0
     const isPlayer = i === 0
     const mass = isPlayer
       ? CONFIG.body.startMass
       : CONFIG.body.startMass * randRange(world, profile.startMassScale[0], profile.startMassScale[1])
     const skill: Difficulty = !isPlayer && endless ? drawSkill(world, CONFIG.body.startMass) : opts.difficulty
-    const x = Math.cos(angle) * built.ringRadius
-    const y = Math.sin(angle) * built.ringRadius
+    const x = Math.cos(angle) * built.ringRadius - Math.sin(angle) * along
+    const y = Math.sin(angle) * built.ringRadius + Math.cos(angle) * along
     world.bodies.push({
       id: isPlayer ? "player" : `bot-${i}`,
       kind: isPlayer ? "player" : "bot",
@@ -236,9 +248,9 @@ export function createWorld(opts: CreateWorldOptions): World {
     })
   }
 
-  // 3. Debris.
-  for (let i = 0; i < CONFIG.debris.target; i++) spawnDebris(world, false)
-  for (let i = 0; i < CONFIG.crystal.target; i++) spawnDebris(world, true)
+  // 3. Debris. The Vast gets a larger budget because its playable area is 5.76x classic's.
+  for (let i = 0; i < debrisBudget(world); i++) spawnDebris(world, false)
+  for (let i = 0; i < crystalBudget(world); i++) spawnDebris(world, true)
 
   // 4. Cosmic schedule.
   world.nextCosmicIn = opts.cosmic === false ? 1e9 : randRange(world, CONFIG.cosmic.firstIn[0], CONFIG.cosmic.firstIn[1])
@@ -1126,15 +1138,19 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
       else count++
     }
     const sc = world.spawnCredit
-    sc.debris += CONFIG.debris.spawnRate * dt
-    while (sc.debris >= 1 && count < CONFIG.debris.target) {
+    const dm = world.arena === "vast" ? CONFIG.vast.debrisMul : 1
+    const cm = world.arena === "vast" ? CONFIG.vast.crystalMul : 1
+    const dTarget = debrisBudget(world)
+    const cTarget = crystalBudget(world)
+    sc.debris += CONFIG.debris.spawnRate * dm * dt
+    while (sc.debris >= 1 && count < dTarget) {
       spawnDebris(world, false)
       count++
       sc.debris -= 1
     }
     sc.debris = Math.min(sc.debris, 1)
-    sc.crystal += CONFIG.crystal.spawnRate * dt
-    while (sc.crystal >= 1 && crystals < CONFIG.crystal.target) {
+    sc.crystal += CONFIG.crystal.spawnRate * cm * dt
+    while (sc.crystal >= 1 && crystals < cTarget) {
       spawnDebris(world, true)
       crystals++
       sc.crystal -= 1
@@ -1367,6 +1383,15 @@ function addUlt(b: Body, amount: number, events: GameEvent[]): void {
   const before = b.ult
   b.ult = Math.min(1, before + amount)
   if (before < 1 && b.ult >= 1) events.push({ type: "ultReady", bodyId: b.id })
+}
+
+/** Target dust/rock count: the classic CONFIG budget, scaled for arenas with more playable area. */
+function debrisBudget(world: World): number {
+  return Math.round(CONFIG.debris.target * (world.arena === "vast" ? CONFIG.vast.debrisMul : 1))
+}
+
+function crystalBudget(world: World): number {
+  return Math.round(CONFIG.crystal.target * (world.arena === "vast" ? CONFIG.vast.crystalMul : 1))
 }
 
 /** True if (x, y) is within well.radius + debris.wellClearance of any well. */

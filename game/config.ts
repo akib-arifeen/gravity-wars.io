@@ -57,6 +57,65 @@ export const CONFIG = {
     wallStiffness: 30,
   },
 
+  /**
+   * Camera and navigation aids. The camera zooms out for arenas larger than `arenaRadiusRef`, but
+   * never past `arenaZoomFloor`, so a body stays readable on a phone. Off-screen arrows widen with
+   * the arena instead of hiding rivals beyond a fixed 1600 u.
+   */
+  camera: {
+    arenaRadiusRef: 2000,
+    arenaZoomFloor: 0.78,
+    indicatorRangeMin: 1600,
+    /** Extra arrow range per world unit of arena radius beyond arenaRadiusRef. */
+    indicatorRangeGain: 1.15,
+    /** Cap on the bot/eye sense multiplier for large arenas. */
+    senseMax: 1.6,
+  },
+
+  /**
+   * The Vast: one deliberately oversized arena. The central star is enormous in radius but lower
+   * in density than the classic star (surface gravity 92 vs 878 u/s²), so the scale is visual and
+   * tactical rather than a stronger gravity well. Everything here is read by arenas.ts; the
+   * debris/round multipliers are also read by engine.ts.
+   */
+  vast: {
+    arenaRadius: 4800,
+    /** Bodies start just outside the belt, not against the wall. */
+    spawnRing: 3300,
+    /**
+     * Opening formation: the roster starts in clusters of `size` bodies, `gap` apart along the
+     * ring. Evenly spread over this ring, 11 bodies start 1859 u from their nearest rival — outside
+     * every bot's hunt range — so the opening stayed silent. Clusters break up as bots graze away;
+     * the arena itself is unchanged.
+     */
+    spawnGroup: { size: 4, gap: 700 },
+    /** 5.6x the classic star's radius, 2.4x its gm: big, but soft for its size (92 u/s² surface). */
+    starGm: 1.2e7,
+    starRadius: 360,
+    starChargeRadius: 900,
+    starChargeRate: 24,
+    planetInnerOrbit: 2000,
+    planetOuterOrbit: 3050,
+    /** Compact remnants on the outer reach, well beyond the spawn ring. */
+    remnantOrbit: 4200,
+    beltInner: 1200,
+    beltOuter: 3200,
+    beltShare: 0.7,
+    /**
+     * More debris, and faster replacement, because the playable area is 5.76x classic. The belt
+     * concentrates it where the fighting happens; the count stays bounded by these two constants.
+     */
+    debrisMul: 2.2,
+    crystalMul: 2.2,
+    /** A longer clock than classic for the longer crossing, without changing other arenas. */
+    roundMul: 1.4,
+    /** A wormhole pair in the middle field: inside the belt, outside the giant star. */
+    wormholeOrbit: [2300, 3000] as readonly [number, number],
+    dustLane: { orbit: 2450, radius: 640, drag: 2.4 },
+    anomaly: { orbit: 1350, radius: 240 },
+    repulsor: { orbit: 4240, radius: 330 },
+  },
+
   body: {
     startMass: 10,
     /** radius = radiusK * sqrt(mass) */

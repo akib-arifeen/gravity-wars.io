@@ -10,7 +10,7 @@ export type Difficulty = "easy" | "normal" | "hard"
  * Arena preset (see arenas.ts). "classic" is the original layout and must stay byte-for-byte
  * what it was before Phase A (tests and the physics reference rely on it).
  */
-export type ArenaId = "classic" | "binary" | "maw" | "nebula" | "belt"
+export type ArenaId = "classic" | "binary" | "maw" | "nebula" | "belt" | "vast"
 
 /**
  * "round": a timed match that ends (critical mass, last standing, time up, or player death).

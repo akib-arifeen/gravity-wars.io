@@ -54,7 +54,7 @@ export function addDays(key: string, n: number): string {
 
 /**
  * The challenge for a date. Deterministic: the same UTC day gives every player the same config.
- * The arena rotates through the five arenas and the seed is a hash of the date key, so the roster
+ * The arena rotates through every arena and the seed is a hash of the date key, so the roster
  * and the layout are identical for everyone that day.
  */
 export function dailyChallenge(date: Date): DailyConfig {
@@ -213,5 +213,7 @@ function arenaName(id: ArenaId): string {
       return "Nebula Field"
     case "belt":
       return "The Belt"
+    case "vast":
+      return "The Vast"
   }
 }
