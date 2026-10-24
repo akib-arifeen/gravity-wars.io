@@ -23,7 +23,8 @@ import {
   type CampaignLevel,
   type CampaignProgress,
 } from "@/game/campaign"
-import { dailyChallenge, dailyScore, dailyStreak, emptyDaily, loadDaily, recordDailyRun, saveDaily, type DailyConfig, type DailyProgress } from "@/game/daily"
+import { dailyScore, dailyStreak, emptyDaily, loadDaily, recordDailyRun, refreshDaily, saveDaily, type DailyConfig, type DailyProgress } from "@/game/daily"
+import { recordsRoundBest, runArena, type RunKind } from "@/game/run-summary"
 import { shareCard, shareOrCopy } from "@/game/share"
 import { ARENAS } from "@/game/arenas"
 import type { InputController } from "@/game/input"
@@ -46,9 +47,6 @@ import {
 import { Toasts, type ToastItem } from "./components/Toasts"
 
 type Screen = "menu" | "playing" | "paused" | "over"
-
-/** What kind of round is running, which decides the end-screen context. */
-type RunKind = "endless" | "round" | "campaign" | "daily"
 
 interface Outcome {
   result: RoundResult
@@ -91,6 +89,7 @@ export default function Page() {
   const [campaignProgress, setCampaignProgress] = useState<CampaignProgress>(emptyProgress())
   const [dailyProgress, setDailyProgress] = useState<DailyProgress>(emptyDaily())
   const [dailyConfig, setDailyConfig] = useState<DailyConfig | null>(null)
+  const [dailyRunConfig, setDailyRunConfig] = useState<DailyConfig | null>(null)
   const [boss, setBoss] = useState<BossHud | null>(null)
   const [deathText, setDeathText] = useState("")
   const [profileTick, setProfileTick] = useState(0)
@@ -118,12 +117,14 @@ export default function Page() {
     mode,
     roundMode,
     roundDifficulty,
+    roundArena,
     runKind,
     campaignLevel,
     roundLevel,
     campaignProgress,
     dailyProgress,
     dailyConfig,
+    dailyRunConfig,
     outcome,
   })
   state.current = {
@@ -135,12 +136,14 @@ export default function Page() {
     mode,
     roundMode,
     roundDifficulty,
+    roundArena,
     runKind,
     campaignLevel,
     roundLevel,
     campaignProgress,
     dailyProgress,
     dailyConfig,
+    dailyRunConfig,
     outcome,
   }
 
@@ -182,7 +185,7 @@ export default function Page() {
     const first = currentLevel(progress)
     setCampaignLevel(first)
     setDailyProgress(loadDaily(stored))
-    setDailyConfig(dailyChallenge(new Date()))
+    setDailyConfig(refreshDaily(null, new Date()))
     if (typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches) setLayout("touch")
     const onPointer = (e: PointerEvent) => {
       if (e.pointerType === "touch") setLayout("touch")
@@ -194,6 +197,28 @@ export default function Page() {
   useEffect(() => {
     sfx?.setMuted(muted)
   }, [sfx, muted])
+
+  // Roll the menu's daily challenge over at UTC midnight, including for a tab that was left open
+  // or in the background. A minute of slack on a minute's tick; nothing runs per frame.
+  useEffect(() => {
+    const sync = () => {
+      setDailyConfig((c) => {
+        const next = refreshDaily(c, new Date())
+        return next.key === c?.key ? c : next
+      })
+    }
+    const timer = window.setInterval(sync, 60_000)
+    const onVisible = () => {
+      if (document.visibilityState === "visible") sync()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    window.addEventListener("focus", sync)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("focus", sync)
+    }
+  }, [])
 
   const unlock = useCallback(() => sfxRef.current?.unlock(), [])
 
@@ -298,8 +323,11 @@ export default function Page() {
 
   // Play today's daily challenge: same seed, arena and skill for everyone, all day.
   const playDaily = useCallback(() => {
-    const config = state.current.dailyConfig
-    if (!config) return
+    // Pick up the new day here as well as from the menu timer, and snapshot the config: a run that
+    // crosses UTC midnight still records on the day it started.
+    const config = refreshDaily(state.current.dailyConfig, new Date())
+    setDailyConfig(config)
+    setDailyRunConfig(config)
     beginRound({ mode: "round", arena: config.arena, difficulty: config.difficulty, kind: "daily", seed: config.seed })
   }, [beginRound])
 
@@ -377,7 +405,8 @@ export default function Page() {
 
   const handleEnd = useCallback((result: RoundResult, stats: BodyStats, earned: AchievementDef[], facts: RunFacts) => {
     const kind = state.current.runKind
-    saveBest(state.current.roundDifficulty, result.playerWon, stats.peakMass)
+    // Only the Round mode's own rounds feed its best map; campaign and daily keep their records.
+    if (recordsRoundBest(kind)) saveBest(state.current.roundDifficulty, result.playerWon, stats.peakMass)
     if (kind === "campaign" && state.current.roundLevel) {
       const level = state.current.roundLevel
       const ctx = { result, stats, relicCollected: facts.relicCollected }
@@ -408,8 +437,8 @@ export default function Page() {
       setScreen("over")
       return
     }
-    if (kind === "daily" && state.current.dailyConfig) {
-      const config = state.current.dailyConfig
+    if (kind === "daily" && state.current.dailyRunConfig) {
+      const config = state.current.dailyRunConfig
       const score = dailyScore(stats)
       const rec = recordDailyRun(state.current.dailyProgress, config, score)
       setDailyProgress(rec.progress)
@@ -433,6 +462,12 @@ export default function Page() {
     const o = state.current.outcome
     if (!o) return
     const kind = state.current.runKind
+    // The arena the run was actually played in: Round/Endless keep it on the round, not on a level.
+    const arena = runArena(kind, {
+      round: state.current.roundArena,
+      level: o.campaign?.level.arena ?? null,
+      daily: state.current.dailyRunConfig?.arena ?? state.current.dailyConfig?.arena ?? null,
+    })
     let input
     if (kind === "campaign" && o.campaign) {
       input = {
@@ -451,14 +486,14 @@ export default function Page() {
         score: o.daily.score,
         best: o.daily.best,
         streak: o.daily.streak,
-        arenaName: ARENAS[state.current.dailyConfig?.arena ?? "classic"].name,
+        arenaName: ARENAS[arena].name,
       }
     } else {
       input = {
         kind: "round" as const,
         result: o.result,
         stats: o.stats,
-        arenaName: ARENAS[state.current.roundLevel?.arena ?? "classic"].name,
+        arenaName: ARENAS[arena].name,
         difficulty: state.current.roundDifficulty,
       }
     }
@@ -526,7 +561,10 @@ export default function Page() {
           timeLimit: roundLevel.timeLimit,
         }
       : null
-  const dailyArena = dailyConfig ? ARENAS[dailyConfig.arena].name : ""
+  // The day the end screen reports: the run's own day once a daily run has started, otherwise the
+  // menu's (today's) challenge.
+  const resultDaily = dailyRunConfig ?? dailyConfig
+  const dailyArena = resultDaily ? ARENAS[resultDaily.arena].name : ""
 
   return (
     <main className="gw-root" data-build="phase-b2-2026-10-24">
@@ -636,9 +674,10 @@ export default function Page() {
           onShare={() => void shareOutcome()}
         />
       )}
-      {screen === "over" && dailyView && (
+      {screen === "over" && resultDaily && (
         <span className="gw-sr-only">
-          Daily {dailyView.config.key} on {dailyArena}: best {dailyView.best}, streak {dailyView.streak}.
+          Daily {resultDaily.key} on {dailyArena}: best {dailyProgress.days[resultDaily.key]?.best ?? 0}, streak{" "}
+          {dailyStreak(dailyProgress, resultDaily.key)}.
         </span>
       )}
       {skin && <span className="gw-sr-only">{SKIN_NAME} skin unlocked.</span>}

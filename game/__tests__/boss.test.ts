@@ -272,9 +272,54 @@ describe("boss balance rules", () => {
     // Splitting happens on the next maintenance pass.
     updateBoss(world, encounter)
     expect(boss.splitDone).toBe(true)
-    // After the split the core can be chipped further, down to a quarter of the starting mass.
+    // The split leaves the core below the post-split floor, so a repulse cannot take more from it
+    // and must not push it back up.
+    const core = bossBody.mass
+    expect(core).toBeLessThan(boss.startingMass * 0.25)
+    for (let i = 0; i < 20; i++) expect(damageBoss(world, encounter, hit)).toBe(0)
+    expect(bossBody.mass).toBe(core)
+    // Above the floor the core is chipped down to a quarter of the starting mass.
+    bossBody.mass = boss.startingMass * 0.5
     for (let i = 0; i < 20; i++) damageBoss(world, encounter, hit)
     expect(bossBody.mass).toBeCloseTo(boss.startingMass * 0.25, 5)
+  })
+
+  it("never heals the split core with a post-split hit", () => {
+    const { world, encounter, boss, bossBody } = encounterWorld("fall-4")
+    const hit = repulseDamageAgainst(boss)
+    for (let i = 0; i < 20; i++) damageBoss(world, encounter, hit)
+    updateBoss(world, encounter)
+    expect(boss.splitDone).toBe(true)
+    const core = bossBody.mass
+    const taken = boss.damageTaken
+    for (let i = 0; i < 5; i++) {
+      const lost = damageBoss(world, encounter, hit)
+      expect(lost).toBeGreaterThanOrEqual(0)
+      expect(lost).toBe(0)
+      expect(bossBody.mass).toBe(core)
+      expect(boss.damageTaken).toBe(taken)
+    }
+    // Above the floor the core takes damage again.
+    bossBody.mass = boss.startingMass * 0.5
+    expect(damageBoss(world, encounter, hit)).toBeCloseTo(hit, 5)
+    expect(bossBody.mass).toBeCloseTo(boss.startingMass * 0.5 - hit, 5)
+  })
+
+  it("conserves mass when the Leviathan splits", () => {
+    const { world, encounter, boss, bossBody } = encounterWorld("fall-4")
+    const hit = repulseDamageAgainst(boss)
+    for (let i = 0; i < 20; i++) damageBoss(world, encounter, hit)
+    const beforeSplit = bossBody.mass
+    updateBoss(world, encounter)
+    expect(boss.splitDone).toBe(true)
+    const fragments = world.bodies.filter((b) => b.id.startsWith("boss-frag"))
+    expect(fragments).toHaveLength(2)
+    // The core gives the fragments exactly what it loses; nothing is created.
+    const total = fragments.reduce((sum, f) => sum + f.mass, bossBody.mass)
+    expect(total).toBeCloseTo(beforeSplit, 5)
+    // The only floor is the normal body minimum.
+    expect(bossBody.mass).toBeGreaterThanOrEqual(CONFIG.body.startMass)
+    for (const f of fragments) expect(f.mass).toBeGreaterThanOrEqual(CONFIG.body.startMass)
   })
 
   it("ignores damage when there is no encounter", () => {

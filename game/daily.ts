@@ -25,8 +25,11 @@ export interface DailyConfig {
 
 export const DAILY_KEY = "gw:daily:v1"
 
-/** How many days of records are kept (the streak and the local best only need recent days). */
-export const DAILY_KEEP_DAYS = 40
+/**
+ * How many days of records are kept. A year, so a full year's streak is still displayable; the
+ * set stays bounded (one small record per day, well under a localStorage quota).
+ */
+export const DAILY_KEEP_DAYS = 365
 
 /** UTC date key for a Date. */
 export function dateKey(date: Date): string {
@@ -62,6 +65,15 @@ export function dailyChallenge(date: Date): DailyConfig {
   const difficulty: Difficulty = number % 7 === 6 ? "hard" : "normal"
   const line = `${arenaName(arena)} · ${difficulty} · one run today`
   return { key, number, seed, arena, difficulty, line }
+}
+
+/**
+ * The daily config the menu and the next run should use at `now`: the caller's cached config
+ * while it still belongs to today, a fresh challenge once the UTC date has rolled over.
+ */
+export function refreshDaily(current: DailyConfig | null, now: Date): DailyConfig {
+  if (current && current.key === dateKey(now)) return current
+  return dailyChallenge(now)
 }
 
 /** The daily score for a finished round: peak mass, rounded. */

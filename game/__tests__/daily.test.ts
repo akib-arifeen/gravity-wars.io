@@ -14,6 +14,7 @@ import {
   emptyDaily,
   loadDaily,
   recordDailyRun,
+  refreshDaily,
   saveDaily,
   type DailyProgress,
 } from "../daily"
@@ -111,6 +112,31 @@ describe("the challenge of a day", () => {
   })
 })
 
+describe("the daily rollover", () => {
+  it("uses the new day's challenge once UTC midnight has passed", () => {
+    const before = dailyChallenge(new Date("2026-10-24T23:59:00Z"))
+    const after = new Date("2026-10-25T00:00:30Z")
+    const shown = refreshDaily(before, after)
+    expect(shown.key).toBe("2026-10-25")
+    expect(shown).toEqual(dailyChallenge(after))
+    // Still the same UTC day: the cached config is reused rather than rebuilt.
+    expect(refreshDaily(shown, new Date("2026-10-25T18:00:00Z"))).toBe(shown)
+    // No config yet: today's challenge.
+    expect(refreshDaily(null, after)).toEqual(dailyChallenge(after))
+  })
+
+  it("records a run that started before midnight under its start day", () => {
+    const started = dailyChallenge(new Date("2026-10-24T23:59:00Z"))
+    const now = new Date("2026-10-25T00:05:00Z")
+    // The menu has moved on to the new day...
+    expect(refreshDaily(started, now).key).toBe("2026-10-25")
+    // ...while the finished run still lands on the day it started.
+    const rec = recordDailyRun(emptyDaily(), started, 50)
+    expect(rec.progress.days["2026-10-24"]).toBeDefined()
+    expect(rec.progress.days["2026-10-25"]).toBeUndefined()
+  })
+})
+
 describe("daily scores and records", () => {
   it("scores a run by peak mass", () => {
     expect(dailyScore(stats())).toBe(64)
@@ -157,6 +183,29 @@ describe("daily scores and records", () => {
     progress = recordDailyRun(progress, config, 20).progress
     expect(progress.days[old]).toBeUndefined()
     expect(progress.days[config.key]).toBeDefined()
+  })
+
+  it("counts a two-month streak without capping the display", () => {
+    const config = dailyChallenge(DAY)
+    let progress: DailyProgress = emptyDaily()
+    for (let i = 59; i >= 0; i--) {
+      progress = recordDailyRun(progress, { ...config, key: addDays(config.key, -i) }, 10).progress
+    }
+    expect(dailyStreak(progress, config.key)).toBe(60)
+    // Retention still bounds what is stored.
+    expect(Object.keys(progress.days).length).toBeLessThanOrEqual(DAILY_KEEP_DAYS + 1)
+  })
+
+  it("keeps a long history bounded", () => {
+    const config = dailyChallenge(DAY)
+    let progress: DailyProgress = emptyDaily()
+    for (let i = 400; i >= 0; i--) {
+      progress = recordDailyRun(progress, { ...config, key: addDays(config.key, -i) }, 10).progress
+    }
+    const kept = Object.keys(progress.days).length
+    expect(kept).toBeLessThanOrEqual(DAILY_KEEP_DAYS + 1)
+    expect(kept).toBeLessThanOrEqual(400)
+    expect(dailyStreak(progress, config.key)).toBe(kept)
   })
 })
 

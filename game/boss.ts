@@ -307,11 +307,14 @@ export function damageBoss(world: World, encounter: EncounterState | null, amoun
   const spec = BOSS_SPECS[boss.kind]
   const floor = boss.kind === "leviathan" && !boss.splitDone ? boss.startingMass * SPLIT_AT : boss.startingMass * 0.25
   const before = body.mass
-  body.mass = Math.max(floor, before - Math.max(1, amount))
-  if (body.mass !== before) {
-    body.radius = radiusForMass(body.mass)
-    boss.damageTaken += before - body.mass
-    return before - body.mass
+  // The floor bounds what a hit may take away; it must never add mass. A split can leave the core
+  // below the post-split floor, so the result is clamped against the current mass as well.
+  const after = Math.min(before, Math.max(floor, before - Math.max(1, amount)))
+  body.mass = after
+  if (after < before) {
+    body.radius = radiusForMass(after)
+    boss.damageTaken += before - after
+    return before - after
   }
   return 0
 }
@@ -453,6 +456,8 @@ function splitLeviathan(world: World, boss: BossState, body: Body): number {
   const current = body.mass
   const fragmentMass = Math.max(CONFIG.body.startMass, current * SPLIT_SHARE)
   const take = fragmentMass * SPLIT_COUNT
+  // Mass-conserving: the fragments carry exactly what the core gives up, and the core never falls
+  // below a normal body (the floor economics of the split, not a damage floor).
   body.mass = Math.max(CONFIG.body.startMass, current - take)
   body.radius = radiusForMass(body.mass)
   for (let i = 0; i < SPLIT_COUNT; i++) {
