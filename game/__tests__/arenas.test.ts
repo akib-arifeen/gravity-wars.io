@@ -11,15 +11,30 @@ import { TWO_PI, angularGap, controlledWorld, dist, expectClose, snapshot } from
 
 const SEEDS = Array.from({ length: 50 }, (_, i) => i + 1)
 
-const BASE: Record<ArenaId, number> = { classic: CONFIG.arena.radius, binary: 2000, maw: 2100, nebula: 2000, belt: 2000 }
-const RING: Record<ArenaId, number> = { classic: CONFIG.spawn.ringRadius, binary: 1600, maw: 1650, nebula: 1550, belt: 1600 }
-const WORMHOLES: Record<ArenaId, boolean> = { classic: true, binary: true, maw: true, nebula: false, belt: true }
+const BASE: Record<ArenaId, number> = {
+  classic: CONFIG.arena.radius,
+  binary: 2000,
+  maw: 2100,
+  nebula: 2000,
+  belt: 2000,
+  vast: CONFIG.vast.arenaRadius,
+}
+const RING: Record<ArenaId, number> = {
+  classic: CONFIG.spawn.ringRadius,
+  binary: 1600,
+  maw: 1650,
+  nebula: 1550,
+  belt: 1600,
+  vast: CONFIG.vast.spawnRing,
+}
+const WORMHOLES: Record<ArenaId, boolean> = { classic: true, binary: true, maw: true, nebula: false, belt: true, vast: true }
 const COUNTS: Record<ArenaId, Partial<Record<WellKind, number>>> = {
   classic: { star: CONFIG.well.starCount, blackhole: 1 },
   binary: { star: 2, neutronstar: 1 },
   maw: { blackhole: 1, whitedwarf: 2, station: 2 },
   nebula: { star: 1, blackhole: 1, pulsar: 1 },
   belt: { star: 1, planet: 2, station: 1 },
+  vast: { star: 1, planet: 2, whitedwarf: 2 },
 }
 const FIELD: Record<ArenaId, { ringShare: number; ringInner?: number; ringOuter?: number }> = {
   classic: { ringShare: 0 },
@@ -27,7 +42,10 @@ const FIELD: Record<ArenaId, { ringShare: number; ringInner?: number; ringOuter?
   maw: { ringShare: 0.4, ringInner: 600, ringOuter: 1000 },
   nebula: { ringShare: 0 },
   belt: { ringShare: 0.65, ringInner: 850, ringOuter: 1150 },
+  vast: { ringShare: CONFIG.vast.beltShare, ringInner: CONFIG.vast.beltInner, ringOuter: CONFIG.vast.beltOuter },
 }
+/** The Vast spawns more debris by design (CONFIG.vast.debrisMul / crystalMul). */
+const budget = (arena: ArenaId, base: number, mul: number) => Math.round(base * (arena === "vast" ? mul : 1))
 
 function make(arena: ArenaId, seed: number, difficulty: "easy" | "normal" | "hard" = "normal"): World {
   return createWorld({ seed, difficulty, arena, cosmic: false })
@@ -41,8 +59,8 @@ function overlapsRing(d: number, e: number, ring: number) {
 }
 
 describe("arena registry", () => {
-  it("ARENA_IDS lists the five arenas, classic first, and ARENAS describes each one", () => {
-    expect([...ARENA_IDS]).toEqual(["classic", "binary", "maw", "nebula", "belt"])
+  it("ARENA_IDS lists the six arenas, classic first, and ARENAS describes each one", () => {
+    expect([...ARENA_IDS]).toEqual(["classic", "binary", "maw", "nebula", "belt", "vast"])
     for (const id of ARENA_IDS) {
       expect(ARENAS[id].id).toBe(id)
       expect(ARENAS[id].name.length).toBeGreaterThan(0)
@@ -116,13 +134,22 @@ for (const arena of ARENA_IDS) {
           const prefix = well.kind === "blackhole" ? "hole" : well.kind
           expect(well.id, label).toBe(`${prefix}-${n}`)
           if (well.kind === "star") {
-            expect(well).toMatchObject({
-              gm: CONFIG.well.starGm,
-              radius: CONFIG.well.starRadius,
-              chargeRadius: CONFIG.well.starChargeRadius,
-              chargeRate: CONFIG.well.starChargeRate,
-              lethal: true,
-            })
+            // The Vast replaces the central star with a giant, deliberately low-density one.
+            const star =
+              arena === "vast"
+                ? {
+                    gm: CONFIG.vast.starGm,
+                    radius: CONFIG.vast.starRadius,
+                    chargeRadius: CONFIG.vast.starChargeRadius,
+                    chargeRate: CONFIG.vast.starChargeRate,
+                  }
+                : {
+                    gm: CONFIG.well.starGm,
+                    radius: CONFIG.well.starRadius,
+                    chargeRadius: CONFIG.well.starChargeRadius,
+                    chargeRate: CONFIG.well.starChargeRate,
+                  }
+            expect(well).toMatchObject({ ...star, lethal: true })
           } else if (well.kind === "blackhole") {
             expect(well.lethal, label).toBe(true)
             expect(well.chargeRadius).toBe(0)
@@ -206,8 +233,10 @@ for (const arena of ARENA_IDS) {
       for (const seed of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
         const w = make(arena, seed)
         const dr = w.debris.filter((d) => d.kind !== "crystal")
-        expect(dr, `${arena} seed ${seed}`).toHaveLength(CONFIG.debris.target)
-        expect(w.debris.filter((d) => d.kind === "crystal")).toHaveLength(CONFIG.crystal.target)
+        expect(dr, `${arena} seed ${seed}`).toHaveLength(budget(arena, CONFIG.debris.target, CONFIG.vast.debrisMul))
+        expect(w.debris.filter((d) => d.kind === "crystal")).toHaveLength(
+          budget(arena, CONFIG.crystal.target, CONFIG.vast.crystalMul),
+        )
         for (const d of w.debris) {
           expect(polar(d)).toBeLessThanOrEqual(w.arenaRadius + 1e-9)
           for (const well of w.wells) {

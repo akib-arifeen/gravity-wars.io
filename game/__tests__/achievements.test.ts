@@ -306,8 +306,8 @@ describe("trackStep: mid-round achievements", () => {
   it("win and round-count achievements never unlock mid-round", () => {
     const a = setup()
     a.profile.stats.rounds = 100
-    a.profile.stats.arenaRounds = { classic: 5, binary: 5, maw: 5, nebula: 5, belt: 5 }
-    a.profile.stats.arenaWins = { classic: 5, binary: 5, maw: 5, nebula: 5, belt: 5 }
+    a.profile.stats.arenaRounds = { classic: 5, binary: 5, maw: 5, nebula: 5, belt: 5, vast: 5 }
+    a.profile.stats.arenaWins = { classic: 5, binary: 5, maw: 5, nebula: 5, belt: 5, vast: 5 }
     a.profile.stats.winsByDifficulty = { easy: 5, normal: 5, hard: 5 }
     const got = trackStep(a.profile, a.tracker, a.world, [], NOW)
     expect(got).toEqual([])
@@ -396,22 +396,22 @@ describe("finishRound: round-end achievements", () => {
 
   it("cartographer: a round in every arena (lifetime); only the last missing arena completes it", () => {
     const profile = emptyProfile()
-    const played: ArenaId[] = ["classic", "binary", "maw", "nebula"]
+    const played: ArenaId[] = ["classic", "binary", "maw", "nebula", "belt"]
     for (const arena of played) {
       expect(finish({ arena, won: false, profile }).defs, arena).not.toContain("cartographer")
     }
     expect(finish({ arena: "classic", won: false, profile }).defs).not.toContain("cartographer")
-    expect(finish({ arena: "belt", won: false, profile }).defs).toContain("cartographer")
-    expect(finish({ arena: "belt", won: false, profile }).defs).not.toContain("cartographer")
+    expect(finish({ arena: "vast", won: false, profile }).defs).toContain("cartographer")
+    expect(finish({ arena: "vast", won: false, profile }).defs).not.toContain("cartographer")
   })
 
   it("conqueror: a win in every arena (losses do not count)", () => {
     const profile = emptyProfile()
-    for (const arena of ["classic", "binary", "maw", "nebula"] as ArenaId[]) {
+    for (const arena of ["classic", "binary", "maw", "nebula", "belt"] as ArenaId[]) {
       expect(finish({ arena, won: true, profile, absorbed: 1, pulled: true }).defs, arena).not.toContain("conqueror")
     }
-    expect(finish({ arena: "belt", won: false, profile }).defs).not.toContain("conqueror")
-    expect(finish({ arena: "belt", won: true, profile, absorbed: 1, pulled: true }).defs).toContain("conqueror")
+    expect(finish({ arena: "vast", won: false, profile }).defs).not.toContain("conqueror")
+    expect(finish({ arena: "vast", won: true, profile, absorbed: 1, pulled: true }).defs).toContain("conqueror")
   })
 
   it("veteran: the 25th round", () => {
@@ -467,8 +467,8 @@ describe("finishRound: round-end achievements", () => {
     })
     expect(profile.stats.timePlayed).toBeCloseTo(120.5, 9)
     expect(profile.stats.winsByDifficulty).toEqual({ easy: 0, normal: 0, hard: 1 })
-    expect(profile.stats.arenaRounds).toEqual({ classic: 0, binary: 0, maw: 0, nebula: 0, belt: 1 })
-    expect(profile.stats.arenaWins).toEqual({ classic: 0, binary: 0, maw: 0, nebula: 0, belt: 1 })
+    expect(profile.stats.arenaRounds).toEqual({ classic: 0, binary: 0, maw: 0, nebula: 0, belt: 1, vast: 0 })
+    expect(profile.stats.arenaWins).toEqual({ classic: 0, binary: 0, maw: 0, nebula: 0, belt: 1, vast: 0 })
 
     // A second, lost round on another arena: counters add, bests keep their maximum.
     const b = setup({ difficulty: "easy", arena: "maw" })

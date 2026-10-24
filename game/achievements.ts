@@ -116,7 +116,7 @@ export interface RoundTracker {
 }
 
 export function emptyProfile(): Profile {
-  const arenaCounts = (): Record<ArenaId, number> => ({ classic: 0, binary: 0, maw: 0, nebula: 0, belt: 0 })
+  const arenaCounts = (): Record<ArenaId, number> => ({ classic: 0, binary: 0, maw: 0, nebula: 0, belt: 0, vast: 0 })
   return {
     version: 1,
     stats: {

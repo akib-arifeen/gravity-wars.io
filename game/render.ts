@@ -5,6 +5,7 @@
 
 import { CONFIG } from "./config"
 import { canAbsorb, pullRadius } from "./engine"
+import { cameraZoomScale, frameEdgeMarker, indicatorRange } from "./framing"
 import type { Body, CosmicKind, GameEvent, PowerUpKind, Vec, World } from "./types"
 
 export interface RenderView {
@@ -470,19 +471,21 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   const nebR = [0, 0, 0]
   let nebSeed = -1
 
-  function placeNebulae(seed: number) {
-    nebSeed = seed
-    let s = (Math.floor(Math.abs(seed)) ^ 0x5bd1e995) >>> 0
+  function placeNebulae(world: World) {
+    nebSeed = world.seed
+    let s = (Math.floor(Math.abs(world.seed)) ^ 0x5bd1e995) >>> 0
     const next = () => {
       s = (Math.imul(s, 1664525) + 1013904223) >>> 0
       return s / 4294967296
     }
+    // The Vast spreads its background clouds over the larger field so the dark does not read flat.
+    const spread = world.arena === "vast" ? Math.sqrt(world.arenaBase / 2000) : 1
     for (let i = 0; i < 3; i++) {
       const a = next() * TAU
-      const d = 300 + next() * 1300
+      const d = (300 + next() * 1300) * spread
       nebX[i] = Math.cos(a) * d
       nebY[i] = Math.sin(a) * d
-      nebR[i] = 600 + next() * 450
+      nebR[i] = (600 + next() * 450) * spread
     }
   }
 
@@ -640,7 +643,8 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   }
 
   function zoomTargetFor(world: World, p: Body): number {
-    let zt = Math.sqrt(W * H) / (1000 + p.radius * 8)
+    // Larger arenas pull the camera back so more context stays readable, never below the floor.
+    let zt = (Math.sqrt(W * H) / (1000 + p.radius * 8)) * cameraZoomScale(world.arenaBase)
     if (world.phase === "countdown") zt *= 0.75
     if (demo) zt *= 0.55
     return zt
@@ -684,7 +688,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     }
     evFlashT = 0
     whInit = false
-    placeNebulae(world.seed)
+    placeNebulae(world)
   }
 
   function resize(v: RenderView) {
@@ -978,6 +982,31 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
 
   function drawArena(world: World, player: Body | undefined, ppx: number, ppy: number) {
     const R = world.arenaRadius
+    // Vast scale: fixed sector rings at one and two thirds of the arena give the eye landmarks.
+    if (world.arenaBase > CONFIG.camera.arenaRadiusRef * 1.5) {
+      g.strokeStyle = "rgba(94,242,255,0.13)"
+      g.lineWidth = 1.4 / zoom
+      setDash(26, 22)
+      for (let i = 1; i <= 2; i++) {
+        g.beginPath()
+        g.arc(0, 0, (world.arenaBase * i) / 3, 0, TAU)
+        g.stroke()
+      }
+      g.setLineDash(NO_DASH)
+      g.strokeStyle = "rgba(94,242,255,0.2)"
+      for (let i = 1; i <= 2; i++) {
+        const sr = (world.arenaBase * i) / 3
+        g.beginPath()
+        for (let k = 0; k < 12; k++) {
+          const a = (k * TAU) / 12
+          const ca = Math.cos(a)
+          const sa = Math.sin(a)
+          g.moveTo(ca * (sr - 14), sa * (sr - 14))
+          g.lineTo(ca * (sr + 14), sa * (sr + 14))
+        }
+        g.stroke()
+      }
+    }
     const esc = R < world.arenaBase - 0.5
     const sev = esc ? clamp((world.arenaBase - R) / (world.arenaBase * (1 - CONFIG.escalation.shrinkTo)), 0, 1) : 0
     if (esc) {
@@ -1098,11 +1127,14 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           const wp = fl && fl.stage === "warning" ? clamp(fl.t / Math.max(0.01, fl.warning), 0, 1) : 0
           const grow = 1 + 0.9 * wp
           const lethalR = hot ? r * CONFIG.cosmic.solarFlare.radiusMul : r
-          const outer = Math.max(r * 4 * gs * grow, w.chargeRadius, hot ? lethalR * 1.6 : 0)
+          // A supergiant's 4x glow covers a millions-of-pixels quad on desktop; 2.4x keeps the
+          // presence with far less overdraw.
+          const glowMul = r >= 220 ? 2.4 : 4
+          const outer = Math.max(r * glowMul * gs * grow, w.chargeRadius, hot ? lethalR * 1.6 : 0)
           if (!visible(x, y, outer)) break
           g.globalCompositeOperation = "lighter"
           g.globalAlpha = 0.85
-          const gl = r * 4 * gs * grow
+          const gl = r * glowMul * gs * grow
           g.drawImage(glow("#ffb347"), x - gl, y - gl, gl * 2, gl * 2)
           if (hot) {
             g.globalAlpha = 0.8
@@ -1127,6 +1159,26 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           g.globalAlpha = 1
           g.globalCompositeOperation = "source-over"
           g.drawImage(hot ? disc("#ffffff", "#fff3c4") : disc("#fff3c4", "#ffb347"), x - r * DISC_PAD, y - r * DISC_PAD, r * 2 * DISC_PAD, r * 2 * DISC_PAD)
+          if (r >= 220) {
+            // Supergiant surface: broad convection bands read as scale at a glance.
+            g.save()
+            g.beginPath()
+            g.arc(x, y, r * 0.97, 0, TAU)
+            g.clip()
+            g.strokeStyle = "rgba(150,44,12,0.22)"
+            g.lineWidth = r * 0.1
+            for (let k = -2; k <= 2; k++) {
+              g.beginPath()
+              g.ellipse(x, y + k * r * 0.31, r, r * 0.2, 0, 0, TAU)
+              g.stroke()
+            }
+            g.strokeStyle = "rgba(255,240,190,0.26)"
+            g.lineWidth = r * 0.04
+            g.beginPath()
+            g.arc(x, y, r * 0.9, 0, TAU)
+            g.stroke()
+            g.restore()
+          }
           if (hot) {
             g.strokeStyle = "rgba(255,150,100,0.85)"
             g.lineWidth = 3 / zoom
@@ -2076,13 +2128,14 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     const hrw = (right - left) / 2
     const hrh = (bottom - top) / 2
     const bs = world.bodies
+    const range = indicatorRange(world.arenaBase)
     for (let i = 1; i < bs.length; i++) {
       const b = bs[i]
       if (!b.alive) continue
       const x = bx[i]
       const y = by[i]
       const dist = Math.hypot(x - ppx, y - ppy)
-      if (dist > 1600) continue
+      if (dist > range) continue
       const sx = (x - camX) * zoom + W / 2
       const sy = (y - camY) * zoom + H / 2
       const m = b.radius * zoom
@@ -2133,7 +2186,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           if (found) break
         }
       }
-      const s = 7 + 9 * (1 - dist / 1600)
+      const s = 7 + 9 * (1 - dist / range)
       g.fillStyle = canAbsorb(b, player) ? C_THREAT : canAbsorb(player, b) ? C_PREY : C_NEUTRAL
       g.globalAlpha = 0.9
       g.beginPath()
@@ -2144,6 +2197,71 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       g.fill()
     }
     g.globalAlpha = 1
+  }
+
+  /** Off-screen compass for the giant central star: which edge the core lies past, and how far. */
+  function drawCoreCompass(world: World) {
+    lbZone = world.mode === "endless"
+    let core: (typeof world.wells)[number] | undefined
+    for (let i = 0; i < world.wells.length; i++) {
+      const w = world.wells[i]
+      if (w.kind !== "star" || w.radius < 220) continue
+      if (!core || w.radius > core.radius) core = w
+    }
+    if (!core) return
+    const left = 24
+    const top = 96
+    const right = W - 24
+    const bottom = Math.max(top + 40, H - (touch ? 170 : 24))
+    const m = frameEdgeMarker(core.x, core.y, camX, camY, zoom, W, H, { left, top, right, bottom })
+    if (!m) return
+    let ex = m.x
+    let ey = m.y
+    if (blocked(ex, ey)) {
+      // Slide along the frame edge until the marker clears the HUD panels.
+      const tx = -Math.sin(m.angle)
+      const ty = Math.cos(m.angle)
+      for (let step = 20; step <= 160 && blocked(ex, ey); step += 20) {
+        for (let sgn = -1; sgn <= 1; sgn += 2) {
+          const px = ex + tx * step * sgn
+          const py = ey + ty * step * sgn
+          if (px >= left && px <= right && py >= top && py <= bottom && !blocked(px, py)) {
+            ex = px
+            ey = py
+            break
+          }
+        }
+      }
+    }
+    const pulse = reduced ? 0.75 : 0.6 + 0.4 * Math.sin(clock * 2.4)
+    g.save()
+    g.translate(ex, ey)
+    g.rotate(m.angle)
+    g.globalAlpha = 0.9 * pulse
+    g.fillStyle = C_AMBER
+    g.beginPath()
+    g.moveTo(9, 0)
+    g.lineTo(0, 5)
+    g.lineTo(-5, 0)
+    g.lineTo(0, -5)
+    g.closePath()
+    g.fill()
+    g.restore()
+    // Label inset toward the frame centre so it stays inside the HUD-safe rectangle.
+    const lx = ex - Math.cos(m.angle) * 26
+    const ly = ey - Math.sin(m.angle) * 26
+    g.globalAlpha = 0.75
+    g.fillStyle = C_AMBER
+    g.font = "700 11px " + FONT
+    g.textAlign = "center"
+    g.textBaseline = "middle"
+    g.fillText(
+      m.distance >= 1000 ? "CORE " + (m.distance / 1000).toFixed(1) + "k" : "CORE " + Math.round(m.distance),
+      lx,
+      ly,
+    )
+    g.globalAlpha = 1
+    g.textBaseline = "alphabetic"
   }
 
   function drawMinimap(world: World) {
@@ -2166,6 +2284,16 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       g.beginPath()
       g.arc(mx, my, world.arenaRadius * k, 0, TAU)
       g.stroke()
+    }
+    // Vast scale: two sector rings give the eye fixed distances in an otherwise empty field.
+    if (world.arenaBase > CONFIG.camera.arenaRadiusRef * 1.5) {
+      g.strokeStyle = "rgba(94,242,255,0.16)"
+      g.lineWidth = 1
+      for (let i = 1; i <= 2; i++) {
+        g.beginPath()
+        g.arc(mx, my, (world.arenaBase * i) / 3 * k, 0, TAU)
+        g.stroke()
+      }
     }
     // zones
     for (let i = 0; i < world.zones.length; i++) {
@@ -2209,9 +2337,17 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     // wells (moving ones at their current position) and wormholes
     for (let i = 0; i < world.wells.length; i++) {
       const w = world.wells[i]
+      const wr = Math.max(w.kind === "neutronstar" || w.kind === "whitedwarf" ? 2.2 : 3, w.radius * k)
+      if (w.kind === "star" && w.chargeRadius * k > wr) {
+        g.strokeStyle = "rgba(255,184,77,0.22)"
+        g.lineWidth = 1
+        g.beginPath()
+        g.arc(mx + w.x * k, my + w.y * k, w.chargeRadius * k, 0, TAU)
+        g.stroke()
+      }
       g.fillStyle = MINI_WELL[w.kind]
       g.beginPath()
-      g.arc(mx + w.x * k, my + w.y * k, w.kind === "neutronstar" || w.kind === "whitedwarf" ? 2.2 : 3, 0, TAU)
+      g.arc(mx + w.x * k, my + w.y * k, wr, 0, TAU)
       g.fill()
     }
     g.fillStyle = C_WORM
@@ -2291,6 +2427,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     }
     drawMinimap(world)
     if (player && player.alive) drawIndicators(world, player, ppx, ppy)
+    drawCoreCompass(world)
   }
 
   // ---- public: render ---------------------------------------------------------------------
@@ -2300,7 +2437,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     curAlpha = alpha
     if (!camInit || nebSeed !== world.seed) {
       if (!camInit) reset(world)
-      else placeNebulae(world.seed)
+      else placeNebulae(world)
     }
     const bs = world.bodies
     const n = bs.length

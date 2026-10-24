@@ -1567,6 +1567,33 @@ body {
   color: #5ef2ff;
 }
 
+/* Panel dismiss control: a real 32 px target so a thumb can close it without the pill. */
+.gw-lb-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: -8px -8px -8px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  color: rgba(232, 246, 255, 0.8);
+  background: transparent;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.gw-lb-close:hover,
+.gw-lb-close:focus-visible {
+  color: #e8f6ff;
+  background: rgba(94, 242, 255, 0.14);
+}
+
 .gw-lb-list {
   margin: 4px 0 0;
   padding: 0;
@@ -1787,52 +1814,54 @@ body {
   margin-top: 0;
 }
 
-/* Landscape phones and short iframes in the touch layout (the pill and .gw-lb-touch only render
-   there, so no pointer query is needed): the leaderboard becomes a rank pill in the
-   top-centre column that opens a dropdown, so it never sits above REPULSE / ULT. */
+/* Landscape phones, portrait phones and short iframes in the touch layout (the pill and
+   .gw-lb-touch only render there, so no pointer query is needed): the leaderboard becomes a rank
+   pill in the top-centre column that opens a panel, so it never sits above REPULSE / ULT. */
 
 .gw-lb-pill,
 .gw-lb-drop {
   display: none;
 }
 
-@media (max-height: 600px) {
+.gw-lb-pill {
+  pointer-events: auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 76px;
+  min-height: 44px;
+  margin-top: 2px;
+  padding: 0 12px;
+  border-radius: 22px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  color: #e8f6ff;
+  background: rgba(6, 10, 24, 0.7);
+  border: 1px solid rgba(94, 242, 255, 0.4);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+@media (max-height: 600px), (max-width: 519px) {
   .gw-lb-touch {
     display: none;
   }
 
   .gw-lb-pill {
-    pointer-events: auto;
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 76px;
-    min-height: 44px;
-    margin-top: 2px;
-    padding: 0 12px;
-    border-radius: 22px;
-    font: inherit;
-    font-size: 15px;
-    font-weight: 800;
-    color: #e8f6ff;
-    background: rgba(6, 10, 24, 0.7);
-    border: 1px solid rgba(94, 242, 255, 0.4);
-    cursor: pointer;
-    touch-action: manipulation;
   }
 
   .gw-lb-drop[data-open="1"] {
     pointer-events: auto;
     display: block;
-    top: calc(96px + env(safe-area-inset-top, 0px));
+    top: calc(60px + env(safe-area-inset-top, 0px));
     right: auto;
     left: 50%;
-    width: 220px;
-    margin-left: -110px;
-    max-height: calc(100dvh - 96px - 8px);
+    width: 232px;
+    margin-left: -116px;
+    max-height: calc(100dvh - 60px - 16px);
     overflow-y: auto;
-    cursor: pointer;
-    touch-action: manipulation;
   }
 
   .gw-hud-rank-ed {
@@ -2492,15 +2521,91 @@ body {
   z-index: 2;
 }
 
-/* Narrow phones: stack the HUD instead of overlapping it. The centre block owns the top strip
-   (level, clock, goal); a boss bar sits under it; the mass/energy panel drops below that. */
-@media (max-width: 519px) {
+/* Phones: stack the HUD instead of overlapping it, and keep only the numbers that matter.
+   Campaign keeps the centre block's (level, clock, goal) strip above the mass panel; Endless and
+   Round have only a pill or a clock up there, so the panel joins them on the top strip.
+   Short landscape touch screens get the same treatment: their 250 px panel is a sixth of the
+   viewport. */
+@media (max-width: 519px), (pointer: coarse) and (max-height: 600px) {
+  .gw-hud[data-mode="endless"] .gw-hud-leftcol,
+  .gw-hud[data-mode="round"] .gw-hud-leftcol {
+    top: calc(8px + env(safe-area-inset-top, 0px));
+  }
+
   .gw-hud-leftcol {
     top: calc(80px + env(safe-area-inset-top, 0px));
+    gap: 5px;
   }
 
   .gw-hud:has(.gw-boss) .gw-hud-leftcol {
     top: calc(140px + env(safe-area-inset-top, 0px));
+  }
+
+  /* Compact panel: the number, the energy bar and the status word. */
+  .gw-hud-panel {
+    width: 108px;
+    padding: 5px 7px 4px;
+    border-radius: 10px;
+  }
+
+  .gw-hud-mass {
+    margin: 1px 0 4px;
+  }
+
+  .gw-hud-mass-value {
+    font-size: 20px;
+  }
+
+  .gw-hud-mass-max {
+    font-size: 10px;
+  }
+
+  /* The first label only names the number under it: keep it for screen readers, not pixels. */
+  .gw-hud-panel > .gw-hud-label:first-child {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .gw-hud-label {
+    font-size: 8px;
+    line-height: 1.3;
+  }
+
+  .gw-hud-energy-label {
+    margin-top: 3px;
+  }
+
+  .gw-hud-status {
+    margin-top: 3px;
+    min-height: 11px;
+    font-size: 9px;
+  }
+
+  .gw-hud-kd,
+  .gw-bar-thin {
+    display: none;
+  }
+
+  /* Flavour text goes first: kills still reach the player through the board and the end screen. */
+  .gw-feed-touch {
+    display: none;
+  }
+
+  .gw-toasts[data-layout="touch"] {
+    top: calc(116px + env(safe-area-inset-top, 0px));
+    width: min(260px, calc(100vw - 32px));
+    margin-left: calc(min(260px, 100vw - 32px) / -2);
+  }
+
+  .gw-toast-desc {
+    font-size: 11px;
   }
 
   .gw-hud-tag {
@@ -2513,13 +2618,15 @@ body {
     max-width: 92vw;
   }
 
-  /* Leave the top-right corner free for the touch layout's minimap. */
+  /* Boss bar sits directly under the centre strip; the top-right corner stays clear for the
+     touch layout's minimap. */
   .gw-boss {
-    top: calc(74px + env(safe-area-inset-top, 0px));
-    left: calc(12px + env(safe-area-inset-left, 0px));
+    top: calc(66px + env(safe-area-inset-top, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
     transform: none;
     width: calc(100vw - 150px);
     max-width: none;
+    padding: 5px 8px 6px;
   }
 
   .gw-boss-name {
@@ -2528,5 +2635,18 @@ body {
 
   .gw-boss-head {
     font-size: 10px;
+  }
+}
+
+/* Portrait phones have the minimap in the top-right corner (a 56 px disc at y 64-176), so the
+   board opens in the old box's slot under it rather than over the map. Landscape keeps it centred
+   under the pill, where nothing else lives. */
+@media (max-width: 519px) {
+  .gw-lb-drop[data-open="1"] {
+    top: calc(184px + env(safe-area-inset-top, 0px));
+    left: auto;
+    right: calc(12px + env(safe-area-inset-right, 0px));
+    margin-left: 0;
+    max-height: calc(100dvh - 184px - 190px - env(safe-area-inset-bottom, 0px));
   }
 }

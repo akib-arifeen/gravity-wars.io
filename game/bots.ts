@@ -7,6 +7,7 @@
 import { CONFIG } from "./config"
 import { gmScale, lethalRadius } from "./cosmic"
 import { canAbsorb, maxSpeed, pullRadius, repulseRadius } from "./engine"
+import { arenaScale } from "./framing"
 import { rand, randRange, seedState } from "./rng"
 import type { Body, Difficulty, Intent, World } from "./types"
 
@@ -149,6 +150,8 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
   const tier = brain.difficulty === "easy" ? 0 : brain.difficulty === "normal" ? 1 : 2
   const gms = gmScale(world)
   const ev = world.cosmic
+  // Larger arenas spread the same content further apart, so the bot's eyes scale with the arena.
+  const sense = arenaScale(world.arenaBase)
   let sx = 0
   let sy = 0
 
@@ -246,7 +249,7 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
     const d = Math.hypot(dx, dy)
     if (d < pr && canAbsorb(me, r)) rivalInPull = true
     if (canAbsorb(r, me)) {
-      const range = (350 + r.radius * 4) * (0.6 + 0.4 * caution)
+      const range = (350 + r.radius * 4) * (0.6 + 0.4 * caution) * sense
       if (d < range) {
         threat = true
         const ax = me.x - (r.x + r.vx * 0.3)
@@ -259,7 +262,7 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
         if (closing > 90 && d < range * 0.7) fastThreat = true
         if (d < rr * 0.85) escapeRepulse = true
       }
-    } else if (!wellPanic && huntOpen && canAbsorb(me, r) && r.shield === 0 && d < 500 + 400 * profile.aggression) {
+    } else if (!wellPanic && huntOpen && canAbsorb(me, r) && r.shield === 0 && d < (500 + 400 * profile.aggression) * sense) {
       const score = r.mass / (d + 50)
       const isKeep = r.id === keepPreyId
       if (score > preyScore || isKeep) {
@@ -323,7 +326,7 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
       sx -= (dx / d) * 1.0
       sy -= (dy / d) * 1.0
     } else if (z.kind === "anomaly" && !threat && !wellPanic && me.ult < 1 && (tier === 2 || me.energy < 60)) {
-      if (d > z.r * 0.4 && d < 1100) {
+      if (d > z.r * 0.4 && d < 1100 * sense) {
         sx += (dx / d) * 1.1
         sy += (dy / d) * 1.1
       }
@@ -334,7 +337,7 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
     const dx = ev.x - me.x
     const dy = ev.y - me.y
     const d = Math.max(Math.hypot(dx, dy), 1e-6)
-    if (d > ev.r * 0.5 && d < 1400) {
+    if (d > ev.r * 0.5 && d < 1400 * sense) {
       sx += (dx / d) * 0.7
       sy += (dy / d) * 0.7
     }
@@ -377,7 +380,7 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
   if (!wellPanic) {
     for (const p of world.pickups) {
       const d = Math.hypot(p.x - me.x, p.y - me.y)
-      if (d > 800 || p.ttl < d / speedMe) continue
+      if (d > 800 * sense || p.ttl < d / speedMe) continue
       consider(p.id, p.x, p.y, PICKUP_VALUE[p.kind] / (d + 30), d)
     }
     for (const c of world.debris) {
@@ -386,7 +389,8 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
       const d2 = dx * dx + dy * dy
       if (d2 < pr * pr) nearDebris++
       const comet = c.kind === "comet"
-      if (d2 > (comet ? 700 * 700 : 600 * 600)) continue
+      const grazeR = (comet ? 700 : 600) * sense
+      if (d2 > grazeR * grazeR) continue
       const d = Math.sqrt(d2)
       let ax = c.x
       let ay = c.y
