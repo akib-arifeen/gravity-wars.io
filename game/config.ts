@@ -82,6 +82,13 @@ export const CONFIG = {
     arenaRadius: 4800,
     /** Bodies start just outside the belt, not against the wall. */
     spawnRing: 3300,
+    /**
+     * Opening formation: the roster starts in clusters of `size` bodies, `gap` apart along the
+     * ring. Evenly spread over this ring, 11 bodies start 1859 u from their nearest rival — outside
+     * every bot's hunt range — so the opening stayed silent. Clusters break up as bots graze away;
+     * the arena itself is unchanged.
+     */
+    spawnGroup: { size: 4, gap: 700 },
     /** 5.6x the classic star's radius, 2.4x its gm: big, but soft for its size (92 u/s² surface). */
     starGm: 1.2e7,
     starRadius: 360,

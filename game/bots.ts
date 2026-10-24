@@ -249,7 +249,10 @@ function decide(world: World, brain: BotBrain, me: Body): Intent {
     const d = Math.hypot(dx, dy)
     if (d < pr && canAbsorb(me, r)) rivalInPull = true
     if (canAbsorb(r, me)) {
-      const range = (350 + r.radius * 4) * (0.6 + 0.4 * caution) * sense
+      // Threat range deliberately does NOT take the arena sense multiplier: the multiplier is for
+      // finding sparse food in a big field. Widening it here would make prey bolt 1.5x earlier in
+      // a large arena while its capture radius stays fixed, so nothing is ever caught.
+      const range = (350 + r.radius * 4) * (0.6 + 0.4 * caution)
       if (d < range) {
         threat = true
         const ax = me.x - (r.x + r.vx * 0.3)

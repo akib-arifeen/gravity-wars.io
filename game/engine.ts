@@ -110,9 +110,12 @@ export interface CreateWorldOptions {
  *    starChargeRate, lethal. Hole: gm holeGm, radius holeRadius, chargeRadius 0, chargeRate 0, lethal.
  * 2. Bodies: player first (id "player", kind "player", CONFIG.player name/colour, mass
  *    startMass), then bots "bot-1".."bot-N" (names/colours from CONFIG.bots in order, mass
- *    startMass * a draw in the difficulty's startMassScale), evenly spaced on the returned ring
- *    radius with one random rotation for the whole ring. Velocity 0, px/py = x/y, energy max,
- *    shield CONFIG.body.spawnShield, all timers/cooldowns/ult 0, power all 0, lastHitBy "",
+ *    startMass * a draw in the difficulty's startMassScale), on the returned ring radius with one
+ *    random rotation for the whole ring. Classic and every arena except the Vast spread them evenly
+ *    around the ring, player first. The Vast uses CONFIG.vast.spawnGroup instead: `size` bodies in
+ *    a row `gap` apart along the ring tangent, groups evenly spaced by anchor angle. Velocity 0,
+ *    px/py = x/y, energy max, shield CONFIG.body.spawnShield, all timers/cooldowns/ult 0, power
+ *    all 0, lastHitBy "",
  *    lastHitAt -1e9, flags false, stats all 0 with peakMass = mass, alive true.
  * 3. Debris: CONFIG.debris.target dust/rock and CONFIG.crystal.target crystals placed per the
  *    debris field (see step 11's placement rule), never within well.radius +
@@ -180,15 +183,24 @@ export function createWorld(opts: CreateWorldOptions): World {
   // 2. Bodies on a ring.
   const total = botCount + 1
   const ringRot = randRange(world, 0, TWO_PI)
+  // The Vast is 5.76x classic's area, so an evenly spread roster would start far outside every
+  // bot's hunt range (see CONFIG.vast.spawnGroup). Vast bodies open in clusters instead; the draw
+  // order is unchanged, so the same seed keeps the same arena, masses and skills.
+  const group = arena === "vast" ? CONFIG.vast.spawnGroup : null
+  const anchors = group ? Math.ceil(total / group.size) : total
   for (let i = 0; i < total; i++) {
-    const angle = ringRot + (TWO_PI * i) / total
+    const slot = group ? i % group.size : 0
+    const groupStart = i - slot
+    const groupSize = group ? Math.min(group.size, total - groupStart) : 1
+    const angle = ringRot + (TWO_PI * (group ? groupStart / group.size : i)) / anchors
+    const along = group ? (slot - (groupSize - 1) / 2) * group.gap : 0
     const isPlayer = i === 0
     const mass = isPlayer
       ? CONFIG.body.startMass
       : CONFIG.body.startMass * randRange(world, profile.startMassScale[0], profile.startMassScale[1])
     const skill: Difficulty = !isPlayer && endless ? drawSkill(world, CONFIG.body.startMass) : opts.difficulty
-    const x = Math.cos(angle) * built.ringRadius
-    const y = Math.sin(angle) * built.ringRadius
+    const x = Math.cos(angle) * built.ringRadius - Math.sin(angle) * along
+    const y = Math.sin(angle) * built.ringRadius + Math.cos(angle) * along
     world.bodies.push({
       id: isPlayer ? "player" : `bot-${i}`,
       kind: isPlayer ? "player" : "bot",

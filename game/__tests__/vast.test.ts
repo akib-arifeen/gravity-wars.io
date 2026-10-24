@@ -110,11 +110,16 @@ describe("vast: celestial bodies", () => {
   })
 
   it("spawns bodies just outside the belt, clear of every lethal surface and charge band", () => {
+    // Clusters sit on the ring tangent, so the furthest a body can drift from the ring is the
+    // half-length of a full group.
+    const halfGroup = V.spawnGroup.gap * ((V.spawnGroup.size - 1) / 2)
+    const furthest = Math.hypot(V.spawnRing, halfGroup)
     for (const seed of SEEDS) {
       const w = make(seed)
       expect(w.bodies).toHaveLength(1 + CONFIG.difficulty.normal.bots)
       for (const b of w.bodies) {
-        expect(polar(b), `seed ${seed} ${b.id}`).toBeCloseTo(V.spawnRing, 6)
+        expect(polar(b), `seed ${seed} ${b.id}`).toBeGreaterThanOrEqual(V.spawnRing - 1)
+        expect(polar(b), `seed ${seed} ${b.id}`).toBeLessThanOrEqual(furthest + 1)
         expect(polar(b)).toBeLessThan(w.arenaRadius - 1200)
         for (const well of w.wells) {
           if (!well.lethal) continue
@@ -125,6 +130,26 @@ describe("vast: celestial bodies", () => {
       }
       // A spawn ring that overlaps a charge band would force bodies to start inside the star's pull.
       expect(V.spawnRing - w.wells[0].chargeRadius).toBeGreaterThan(120)
+    }
+  })
+
+  it("opens with rivals inside hunt range, without overlapping", () => {
+    for (const seed of SEEDS) {
+      const w = make(seed)
+      const sense = arenaScale(w.arenaBase)
+      const hunt = (500 + 400 * CONFIG.difficulty.normal.aggression) * sense
+      for (const b of w.bodies) {
+        let nearest = Infinity
+        for (const other of w.bodies) {
+          if (other === b) continue
+          const d = Math.hypot(b.x - other.x, b.y - other.y)
+          nearest = Math.min(nearest, d)
+          expect(d, `seed ${seed} ${b.id} overlaps ${other.id}`).toBeGreaterThan(2 * (b.radius + other.radius))
+        }
+        // Evenly spread over this ring, the roster opened 1859 u apart — outside every hunt range.
+        expect(nearest, `seed ${seed} ${b.id} nearest rival`).toBeLessThanOrEqual(V.spawnGroup.gap + 1)
+        expect(nearest, `seed ${seed} ${b.id} nearest rival`).toBeLessThan(hunt)
+      }
     }
   })
 
@@ -209,6 +234,54 @@ describe("vast: bots spawn, navigate and feed", () => {
       expect(eaten, `seed ${seed} debris eaten`).toBeGreaterThan(25)
     }
   }, 20_000)
+
+  it("meets a rival within seconds of the start and gets an early absorb", () => {
+    const contacts: number[] = []
+    let seedWithAbsorb = 0
+    for (const seed of [1, 2, 3, 4, 5, 6]) {
+      const w = make(seed, "normal", undefined, "endless")
+      w.phase = "playing"
+      w.countdown = 0
+      // Same brains GameView builds: the player is piloted by a hard bot, rivals by their skill.
+      const brains = new Map<string, BotBrain>()
+      w.bodies.forEach((b, i) => {
+        brains.set(b.id, createBotBrain(b.id, b.id === "player" ? "hard" : b.skill, seed + i * 7919))
+      })
+      const player = w.bodies[0]
+      const intents = new Map<string, ReturnType<typeof botIntent>>()
+      let contact: number | null = null
+      let absorbs = 0
+      for (let i = 0; i < Math.round(30 / DT); i++) {
+        intents.clear()
+        for (const b of w.bodies) {
+          const brain = brains.get(b.id)
+          if (b.alive && brain) intents.set(b.id, botIntent(w, brain))
+        }
+        step(w, intents)
+        const t = i * DT
+        for (const ev of w.events) if (ev.type === "absorb") absorbs++
+        if (contact === null && player.alive) {
+          for (const b of w.bodies) {
+            if (b === player || !b.alive) continue
+            if (Math.hypot(b.x - player.x, b.y - player.y) < 450) {
+              contact = t
+              break
+            }
+          }
+        }
+      }
+      expect(w.phase, `seed ${seed}`).toBe("playing")
+      // Encounters must not become spawn kills: the player still has to be alive to react.
+      expect(player.alive, `seed ${seed} player died in the opening`).toBe(true)
+      expect(contact, `seed ${seed} never came within 450 u of a rival`).not.toBeNull()
+      contacts.push(contact!)
+      if (absorbs > 0) seedWithAbsorb++
+    }
+    // Measured on this revision over seeds 1-6: 1 s .. 12 s. Evenly spread spawns never met.
+    expect(Math.max(...contacts)).toBeLessThan(20)
+    // Measured 2 of 6 seeds; before clustered spawns no seed absorbed at all inside 30 s.
+    expect(seedWithAbsorb).toBeGreaterThanOrEqual(2)
+  }, 30_000)
 
   it("sees food further away than in classic, matching the larger field", () => {
     expect(arenaScale(V.arenaRadius)).toBeGreaterThan(1.4)

@@ -90,13 +90,25 @@ describe("arena registry", () => {
 for (const arena of ARENA_IDS) {
   describe(`arena: ${arena}`, () => {
     it("base radius, spawn ring, debris field and well/zone/wormhole inventory (50 seeds)", () => {
+      // The Vast opens in clusters leaning along the ring tangent (CONFIG.vast.spawnGroup), so its
+      // bodies sit on or just outside the ring rather than exactly on it.
+      const ringBand = (CONFIG.vast.spawnGroup.gap * (CONFIG.vast.spawnGroup.size - 1)) / 2
       for (const seed of SEEDS) {
         const w = make(arena, seed)
         const label = `${arena} seed ${seed}`
         expect(w.arena, label).toBe(arena)
         expect(w.arenaBase, label).toBe(BASE[arena])
         expect(w.arenaRadius, label).toBe(BASE[arena])
-        for (const b of w.bodies) expectClose(polar(b), RING[arena], 1e-6, `${label} ${b.id} ring distance`)
+        for (const b of w.bodies) {
+          if (arena === "vast") {
+            expect(polar(b), `${label} ${b.id} ring distance`).toBeGreaterThanOrEqual(RING[arena] - 1e-6)
+            expect(polar(b), `${label} ${b.id} ring distance`).toBeLessThanOrEqual(
+              Math.hypot(RING[arena], ringBand) + 1e-6,
+            )
+          } else {
+            expectClose(polar(b), RING[arena], 1e-6, `${label} ${b.id} ring distance`)
+          }
+        }
         expect(w.debrisField.ringShare, label).toBe(FIELD[arena].ringShare)
         if (FIELD[arena].ringShare > 0) {
           expect(w.debrisField.ringInner, label).toBe(FIELD[arena].ringInner)
@@ -210,14 +222,24 @@ for (const arena of ARENA_IDS) {
       }
     })
 
-    it("bodies start evenly spaced, at rest, clear of every lethal well (50 seeds)", () => {
+    it("bodies start in their spawn formation, at rest, clear of every lethal well (50 seeds)", () => {
       for (const seed of SEEDS) {
         const w = make(arena, seed)
-        const n = w.bodies.length
-        const angles = w.bodies.map((b) => Math.atan2(b.y, b.x)).sort((a, b) => a - b)
-        for (let i = 0; i < n; i++) {
-          const next = i + 1 < n ? angles[i + 1] : angles[0] + TWO_PI
-          expectClose(next - angles[i], TWO_PI / n, 1e-9, `${arena} seed ${seed} angular gap`)
+        if (arena === "vast") {
+          // Clustered opening, so the invariant is the in-group gap rather than an even angular one.
+          const gap = CONFIG.vast.spawnGroup.gap
+          for (const b of w.bodies) {
+            let nearest = Infinity
+            for (const other of w.bodies) if (other !== b) nearest = Math.min(nearest, dist(b, other))
+            expectClose(nearest, gap, 1e-6, `${arena} seed ${seed} ${b.id} cluster gap`)
+          }
+        } else {
+          const n = w.bodies.length
+          const angles = w.bodies.map((b) => Math.atan2(b.y, b.x)).sort((a, b) => a - b)
+          for (let i = 0; i < n; i++) {
+            const next = i + 1 < n ? angles[i + 1] : angles[0] + TWO_PI
+            expectClose(next - angles[i], TWO_PI / n, 1e-9, `${arena} seed ${seed} angular gap`)
+          }
         }
         for (const b of w.bodies) {
           for (const well of w.wells) {
