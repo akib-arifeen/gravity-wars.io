@@ -492,6 +492,18 @@ export function createSfx(): Sfx {
             voice("square", 2000, 2000, 0.02, 0.05, 0.25)
             break
           }
+          case "oberth": {
+            if (ev.bodyId !== "player") break
+            // Graded rise: a deeper tier starts higher and adds one more note, so the reward is
+            // audible without a separate cue per tier. Synthesised, like every other sound.
+            const root = ev.tier === "oberth" ? C5 : ev.tier === "burn" ? 392 : 329.63
+            noise(0.26, 0.12, "bandpass", 1600, 5200, 1.1)
+            voice("triangle", root, root * 2, 0.28, 0.13)
+            voice("triangle", root * 1.25, root * 1.25, 0.26, 0.1, 0.07)
+            voice("sine", root * 1.5, root * 1.5, 0.42, 0.11, 0.14)
+            if (ev.tier === "oberth") voice("sine", root * 2, root * 2, 0.55, 0.08, 0.22)
+            break
+          }
           case "pickup": {
             if (ev.bodyId !== "player") break
             pickupSound(ev.kind)

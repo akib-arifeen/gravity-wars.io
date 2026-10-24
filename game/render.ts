@@ -3,6 +3,7 @@
 //
 // CONTRACT — exported signatures and documented behaviour are fixed.
 
+import { assistView } from "./assist"
 import { CONFIG } from "./config"
 import { canAbsorb, pullRadius } from "./engine"
 import { cameraZoomScale, frameEdgeMarker, indicatorRange } from "./framing"
@@ -864,6 +865,30 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
           if (ev.bodyId === "player") spawnText("SLINGSHOT " + Math.round(ev.speed), ev.x, ev.y - 30, "#e8f6ff", 16, false)
           break
         }
+        case "oberth": {
+          // The graded flyby burn. Colour by tier, then reuse the slingshot trail.
+          const bi = bodyIndex(world, ev.bodyId)
+          const col = ev.tier === "oberth" ? "#ffd36b" : ev.tier === "burn" ? "#ffb347" : "#9fe8ff"
+          if (bi >= 0) {
+            slingT[bi] = 0.9
+            popX[bi] += ev.tier === "oberth" ? 0.2 : 0.1
+            popV[bi] += 6
+            if (reduced) {
+              // Reduced motion: a single static ring, no particles, no flash, no shake.
+              shockwave(ev.x, ev.y, 120, col)
+            } else {
+              burst(ev.x, ev.y, ev.tier === "oberth" ? 34 : 20, 90, ev.tier === "oberth" ? 480 : 320, 0.6, 3, col, true)
+              shockwave(ev.x, ev.y, ev.tier === "oberth" ? 260 : 180, col)
+              flashAt(ev.x, ev.y, ev.tier === "oberth" ? 200 : 140, col)
+            }
+          }
+          if (ev.bodyId === "player" && player) {
+            if (!reduced) trauma = Math.min(1, trauma + (ev.tier === "oberth" ? 0.22 : 0.12))
+            const label = ev.tier === "oberth" ? "OBERTH" : ev.tier === "burn" ? "BURN" : "GRAZE"
+            spawnText(label + "  x" + ev.speedMul.toFixed(2), player.x, player.y - player.radius - 40, col, ev.tier === "oberth" ? 19 : 17, false)
+          }
+          break
+        }
         case "pickup": {
           const col = PICK_COL[ev.kind]
           burst(ev.x, ev.y, 14, 60, 220, 0.5, 2.6, col, true)
@@ -1114,12 +1139,24 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     const gs = storm ? 1.5 : 1
     const simT = world.time - CONFIG.dt * (1 - curAlpha)
     const charging = !!player && player.alive && player.charging
+    // The one well that currently holds the player's flyby pass, if any (telegraphed below).
+    const pass = player && player.alive ? assistView(world, player) : null
     for (let i = 0; i < wells.length; i++) {
       const w = wells[i]
       const r = w.radius
       wellPos(w)
       const x = WX
       const y = WY
+      if (pass && pass.wellId === w.id) {
+        const pr = w.radius * CONFIG.assist.periBand
+        if (visible(x, y, pr + 60)) {
+          // The periapsis band: a dash inside it is the burn. It brightens and quickens when the
+          // timed window is live; reduced motion keeps it static.
+          const hot = pass.window
+          dashRing(x, y, pr, hot ? "#ffe28a" : "#8fd9ff", hot ? 0.9 : 0.32, 14, 12, reduced ? 0 : hot ? 46 : 10)
+          if (hot) dashRing(x, y, pr, "#ffffff", 0.4, 3, 46, reduced ? 0 : 30)
+        }
+      }
       switch (w.kind) {
         case "star": {
           const fl = cosmic && cosmic.kind === "solarFlare" && cosmic.targetId === w.id ? cosmic : null
@@ -1950,6 +1987,21 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       else g.arc(x, y, r, 0, TAU)
       g.stroke()
       g.globalAlpha = 1
+      // Earned gravity-assist surge: a rim that fades as the boost expires. Reduced motion keeps
+      // it a still ring; it never covers the body and adds no persistent HUD.
+      if (b.assist.surge > 0) {
+        const f = b.assist.surgeFull > 0 ? clamp(b.assist.surge / b.assist.surgeFull, 0, 1) : 1
+        const pulse = reduced ? 1 : 0.7 + 0.3 * Math.sin(clock * 7)
+        g.globalCompositeOperation = "lighter"
+        g.globalAlpha = (0.35 + 0.5 * f) * pulse
+        g.strokeStyle = "#ffd36b"
+        g.lineWidth = 2.4 / zoom
+        g.beginPath()
+        g.arc(x, y, r + 5 / zoom, 0, TAU)
+        g.stroke()
+        g.globalAlpha = 1
+        g.globalCompositeOperation = "source-over"
+      }
       if (i > 0 && playerAlive && player) {
         const pd = Math.hypot(x - bx[0], y - by[0])
         if (pd < 500 && canAbsorb(b, player)) {
@@ -2424,6 +2476,25 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       g.fillStyle = `rgb(${evFlashRgb})`
       g.fillRect(0, 0, W, H)
       g.globalAlpha = 1
+    }
+    // Flyby telegraph: the dash is only the burn inside the periapsis window. Drawn above the
+    // player in screen space so it stays legible at any zoom (and needs no HUD element).
+    if (player && player.alive) {
+      const v = assistView(world, player)
+      if (v.window && player.dashCd <= 0) {
+        const sx = (ppx - camX) * zoom + W / 2 + shx
+        const sy = (ppy - camY) * zoom + H / 2 + shy - player.radius * zoom - 24
+        g.globalAlpha = reduced ? 0.9 : 0.7 + 0.3 * Math.sin(clock * 14)
+        g.font = "700 13px " + FONT
+        g.textAlign = "center"
+        g.textBaseline = "alphabetic"
+        g.fillStyle = "#ffe28a"
+        g.shadowColor = "#ffb347"
+        g.shadowBlur = 8
+        g.fillText(touch ? "BURN" : "BURN  SHIFT", sx, sy)
+        g.shadowBlur = 0
+        g.globalAlpha = 1
+      }
     }
     drawMinimap(world)
     if (player && player.alive) drawIndicators(world, player, ppx, ppy)

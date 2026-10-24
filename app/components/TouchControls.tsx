@@ -249,6 +249,7 @@ export function TouchControls({ input, hud = null, onGesture, lockedAbilities = 
           data-gw-ability="dash"
           data-locked={isLocked("dash") ? "1" : undefined}
           data-low={energy < ab.dash.cost ? "1" : undefined}
+          data-burn={hud?.assist.window && (hud?.dashCd ?? 0) <= 0 ? "1" : undefined}
           style={{ ["--p" as string]: isLocked("dash") ? 0 : cd(hud?.dashCd, hud?.dashMax) }}
           onPointerDown={isLocked("dash") ? undefined : press("dash")}
         >

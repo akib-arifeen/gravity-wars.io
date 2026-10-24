@@ -196,6 +196,10 @@ export function trackStep(profile: Profile, tracker: RoundTracker, world: World,
       case "slingshot":
         if (ev.bodyId === "player") grant(profile, now, "slingshot")
         break
+      case "oberth":
+        // The graded flyby burn counts as a slingshot: it also increments stats.slingshots.
+        if (ev.bodyId === "player") grant(profile, now, "slingshot")
+        break
       case "assist":
         if (ev.bodyId === "player") grant(profile, now, "gravity_assist")
         break

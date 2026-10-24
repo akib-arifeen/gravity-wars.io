@@ -1096,6 +1096,21 @@ body {
   animation: gw-glow 1s ease-in-out infinite;
 }
 
+/* Gravity-assist burn window: the dash control that already exists glows amber while a dash
+   would be graded as the burn. No new element, and reduced motion below keeps it a still glow. */
+.gw-slot[data-burn="1"],
+.gw-abtn[data-burn="1"] {
+  border-color: #ffd36b;
+  box-shadow: 0 0 18px rgba(255, 179, 71, 0.85);
+  animation: gw-burn 0.6s ease-in-out infinite;
+}
+
+@keyframes gw-burn {
+  50% {
+    box-shadow: 0 0 6px rgba(255, 179, 71, 0.45);
+  }
+}
+
 /* ---------- compact HUD column ---------- */
 
 @media (max-width: 479px) {
@@ -1486,7 +1501,9 @@ body {
   .gw-toast,
   .gw-wall-banner,
   .gw-abtn[data-ready="1"].gw-abtn-ult,
-  .gw-slot[data-ready="1"] {
+  .gw-slot[data-ready="1"],
+  .gw-slot[data-burn="1"],
+  .gw-abtn[data-burn="1"] {
     animation: none;
   }
 }
