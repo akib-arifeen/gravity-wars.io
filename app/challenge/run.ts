@@ -97,9 +97,11 @@ export function submissionPayload(run: ChallengeRun): PayloadResult {
     }
   }
   if (run.recorder.length > run.descriptor.limits.maxTraceSteps) {
+    // Deliberately not the server's TRACE_TOO_LONG: this refusal never left the browser, and the
+    // view has to be able to tell the two apart.
     return {
       ok: false,
-      code: "TRACE_TOO_LONG",
+      code: "TRACE_OVER_LIMIT",
       message: `The recorded run is ${run.recorder.length} steps; this descriptor allows ${run.descriptor.limits.maxTraceSteps}.`,
     }
   }

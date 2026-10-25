@@ -23,7 +23,12 @@ export interface ChallengeView {
   note: string
 }
 
-const LOCAL_REFUSALS = ["ASSISTED_UNDECLARED", "RUN_NOT_FINISHED", "TRACE_TOO_LONG", "IDEMPOTENCY_KEY_INVALID"]
+/**
+ * Refusals this client raises itself, before anything is sent. Only codes `submissionPayload`
+ * returns belong here; a code the server also sends (TRACE_TOO_LONG) cannot identify a local
+ * refusal, and IDEMPOTENCY_KEY_INVALID comes from the transport layer rather than the run.
+ */
+const LOCAL_REFUSALS = ["ASSISTED_UNDECLARED", "RUN_NOT_FINISHED", "TRACE_OVER_LIMIT"]
 
 export function challengeView(state: SubmitState): ChallengeView {
   const base = { code: null, score: null, rank: null, ranked: false, verified: false, retry: false, note: REPLAY_NOTE }

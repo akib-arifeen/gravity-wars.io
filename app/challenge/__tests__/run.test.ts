@@ -228,6 +228,6 @@ describe("challenge run", () => {
     run.recorder.record(NO_INTENT)
     run.recorder.record(NO_INTENT)
     noteRunResult(run, stats({ peakMass: 10 }))
-    expect(submissionPayload(run)).toMatchObject({ ok: false, code: "TRACE_TOO_LONG" })
+    expect(submissionPayload(run)).toMatchObject({ ok: false, code: "TRACE_OVER_LIMIT" })
   })
 })

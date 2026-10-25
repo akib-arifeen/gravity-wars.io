@@ -126,6 +126,7 @@ describe("descriptor", () => {
     })
     expect(descriptor.assisted).toBe(true)
     expect(descriptor.ranked).toBe(false)
+    expect(descriptor.submission.path).toBe(`/v1/daily/runs/${RUN_ID}/submissions`)
     expect(descriptor.submission.token).toHaveLength(43)
   })
 
@@ -139,6 +140,9 @@ describe("descriptor", () => {
       descriptorBody({ nonce: "nope" }),
       descriptorBody({ submission: { path: `/v1/daily/runs/${RUN_ID}/submissions`, token: "short" } }),
       descriptorBody({ submission: { path: "/v1/other", token: "t".repeat(43) } }),
+      descriptorBody({
+        submission: { path: "/v1/daily/runs/99999999-0000-4000-8000-000000000000/submissions", token: "t".repeat(43) },
+      }),
       descriptorBody({ expiresAt: "2026-10-26T11:00:00.000Z" }),
       descriptorBody({ limits: { maxTraceSteps: 0, maxBodyBytes: 1 } }),
     ]

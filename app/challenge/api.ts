@@ -232,18 +232,21 @@ function parseDescriptor(value: unknown): RunDescriptor {
   if (!(ARENA_IDS as readonly string[]).includes(arena)) bad("challenge.arena is not an arena this game knows")
   const difficulty = text(challenge.difficulty, "challenge.difficulty")
   if (!(DIFFICULTIES as string[]).includes(difficulty)) bad("challenge.difficulty is not a known skill")
+  const runId = text(body.runId, "runId")
   const nonce = text(body.nonce, "nonce")
   if (!/^[a-f0-9]{32}$/.test(nonce)) bad("nonce must be 32 lowercase hex characters")
   const token = text(submission.token, "submission.token")
   if (token.length < 20 || token.length > 200) bad("submission.token is malformed")
   const path = text(submission.path, "submission.path")
-  if (!path.startsWith("/v1/daily/runs/") || !path.endsWith("/submissions")) bad("submission.path is not a run submission path")
+  // The path is not trusted on its own: a descriptor must address the run it names, or the client
+  // would submit this trace under another run's id.
+  if (path !== `/v1/daily/runs/${runId}/submissions`) bad("submission.path does not address this run")
   const issuedAt = time(body.issuedAt, "issuedAt")
   const expiresAt = time(body.expiresAt, "expiresAt")
   if (expiresAt <= issuedAt) bad("the descriptor expires before it was issued")
 
   return {
-    runId: text(body.runId, "runId"),
+    runId,
     leagueId: text(body.leagueId, "leagueId"),
     challenge: {
       date,

@@ -111,10 +111,19 @@ describe("challengeView", () => {
   })
 
   it("calls a local refusal what it is: not submitted", () => {
-    for (const code of ["ASSISTED_UNDECLARED", "RUN_NOT_FINISHED", "TRACE_TOO_LONG"]) {
+    for (const code of ["ASSISTED_UNDECLARED", "RUN_NOT_FINISHED", "TRACE_OVER_LIMIT"]) {
       const view = challengeView({ phase: "failure", attempt: 0, code, message: "refused", retryable: false, retryAfterS: null })
       expect(view.headline).toBe("Not submitted")
       expect(view.retry).toBe(false)
+    }
+  })
+
+  it("does not call a server code, or a transport code, a local refusal", () => {
+    // TRACE_TOO_LONG is also a server answer, and IDEMPOTENCY_KEY_INVALID comes from the client's
+    // transport layer, so neither proves nothing was sent.
+    for (const code of ["TRACE_TOO_LONG", "IDEMPOTENCY_KEY_INVALID", "SCORE_MISMATCH"]) {
+      const view = challengeView({ phase: "failure", attempt: 1, code, message: "refused", retryable: false, retryAfterS: null })
+      expect(view.headline).toBe("Submission failed")
     }
   })
 })

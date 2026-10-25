@@ -30,6 +30,7 @@ import { ARENAS } from "@/game/arenas"
 import type { InputController } from "@/game/input"
 import type { ArenaId, BodyStats, Difficulty, GameMode, HudSnapshot, RoundResult } from "@/game/types"
 import { ChallengeApiError, createChallengeClient, resolveChallengeBase } from "./challenge/api"
+import { requestIssuedRun } from "./challenge/issue"
 import { configFromDescriptor, createChallengeRun, noteRunResult, type ChallengeRun } from "./challenge/run"
 import { submitChallengeRun, type SubmitState } from "./challenge/submit"
 import { challengeView } from "./challenge/view"
@@ -85,8 +86,8 @@ const FIRST_RUN = startDefaults({})
 
 /**
  * The verified-run experiment: a local challenge server, off unless
- * NEXT_PUBLIC_GW_CHALLENGE_API names a loopback API at build time. A default build has no base,
- * no client and no network calls, so the static game is exactly what it was.
+ * NEXT_PUBLIC_GW_CHALLENGE_API names a loopback API at build time. A default build has no base
+ * and no client, so the page renders no extra UI and makes no request.
  */
 const CHALLENGE = resolveChallengeBase(process.env.NEXT_PUBLIC_GW_CHALLENGE_API)
 const CHALLENGE_CLIENT = CHALLENGE.base === null ? null : createChallengeClient({ base: CHALLENGE.base })
@@ -149,6 +150,10 @@ export default function Page() {
   const toastKey = useRef(0)
   const topRef = useRef<boolean | null>(null)
   const lastLeadToast = useRef(0)
+  // Bumped by every beginRound, so a descriptor that arrives later can tell a round happened.
+  const roundSeq = useRef(0)
+  // Token of the newest descriptor request; only the newest may touch the issue state.
+  const challengeRequest = useRef(0)
   const state = useRef({
     screen,
     difficulty,
@@ -363,6 +368,7 @@ export default function Page() {
     }) => {
       const progress = state.current.campaignProgress
       const unlockedNow = unlockedAbilities(progress)
+      roundSeq.current += 1
       setRoundMode(opts.mode)
       setRoundArena(opts.arena)
       setRoundDifficulty(opts.difficulty)
@@ -409,28 +415,45 @@ export default function Page() {
   }, [beginRound])
 
   // Verified run: ask the local server for the daily descriptor and play exactly what it issued.
-  // The client never picks the seed, arena, skill or ruleset.
+  // The client never picks the seed, arena, skill or ruleset. The request carries the request
+  // token and the round generation it was made in: if the player starts a round or changes mode
+  // while it is in flight, the answer is dropped instead of replacing what they chose.
   const startVerifiedRun = useCallback(() => {
     const client = CHALLENGE_CLIENT
     if (!client || challengeIssue.phase === "pending") return
+    const request = ++challengeRequest.current
+    const round = roundSeq.current
     // The debug autopilot is an assist, and assisted has to be declared when the run is issued.
     const autopilot = typeof window !== "undefined" && window.__gw?.autopilot === true
     setChallengeIssue({ phase: "pending", message: "" })
-    client
-      .issue(challengeAssisted || autopilot)
-      .then((descriptor) => {
-        setDailyRunConfig(configFromDescriptor(descriptor))
-        setChallengeIssue({ phase: "idle", message: "" })
-        beginRound({
-          mode: "round",
-          arena: descriptor.challenge.arena,
-          difficulty: descriptor.challenge.difficulty,
-          kind: "daily",
-          seed: descriptor.challenge.seed,
-          challenge: createChallengeRun(descriptor),
-        })
+    void requestIssuedRun(client, challengeAssisted || autopilot, request, round, () => ({
+      latestRequest: challengeRequest.current,
+      latestRound: roundSeq.current,
+      screen: state.current.screen,
+      mode: state.current.mode,
+    })).then((outcome) => {
+      // A newer request owns the pending state; an older answer must not touch it.
+      if (outcome.kind === "superseded") return
+      if (outcome.kind !== "issued") {
+        setChallengeIssue(
+          outcome.kind === "failed"
+            ? { phase: "error", message: challengeErrorText(outcome.error) }
+            : { phase: "idle", message: "" },
+        )
+        return
+      }
+      const descriptor = outcome.descriptor
+      setDailyRunConfig(configFromDescriptor(descriptor))
+      setChallengeIssue({ phase: "idle", message: "" })
+      beginRound({
+        mode: "round",
+        arena: descriptor.challenge.arena,
+        difficulty: descriptor.challenge.difficulty,
+        kind: "daily",
+        seed: descriptor.challenge.seed,
+        challenge: createChallengeRun(descriptor),
       })
-      .catch((error: unknown) => setChallengeIssue({ phase: "error", message: challengeErrorText(error) }))
+    })
   }, [beginRound, challengeAssisted, challengeIssue.phase])
 
   // Retry the same submission: the run keeps its idempotency key, so this cannot score twice.

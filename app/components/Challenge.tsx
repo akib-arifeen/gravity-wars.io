@@ -78,7 +78,7 @@ export function ChallengeStatus({ view, onRetry }: ChallengeStatusProps) {
       {view.score !== null && (
         <p className="gw-challenge-score">
           <strong>{view.score}</strong>
-          <span>verified peak mass</span>
+          <span>{view.verified ? "verified peak mass" : "server score"}</span>
         </p>
       )}
       {view.detail !== "" && <p className="gw-challenge-line">{view.detail}</p>}

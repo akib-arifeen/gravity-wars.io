@@ -104,6 +104,7 @@ describe("verified-run UI", () => {
     expect(success).toContain("Replay-verified")
     expect(success).toContain(">73<")
     expect(success).toContain("Rank 3")
+    expect(success).toContain("verified peak mass")
 
     const failure = renderToStaticMarkup(
       createElement(ChallengeStatus, {
@@ -121,6 +122,32 @@ describe("verified-run UI", () => {
     expect(failure).toContain("Submission failed")
     expect(failure).toContain("Retry submission")
     expect(failure).toContain("NETWORK")
+  })
+
+  it("labels the score as verified only when the server verified the replay", () => {
+    const result = {
+      submissionId: "11111111-1111-4111-8111-111111111111",
+      runId: "00000000-0000-4000-8000-000000000000",
+      leagueId: "daily:2026-10-26:v1",
+      date: "2026-10-26",
+      rulesetVersion: 1,
+      assisted: false,
+      ranked: false,
+      verified: false,
+      verification: "stored-only",
+      score: 73,
+      claimedScore: 73,
+      traceSteps: 9100,
+      replayMs: 0,
+      submittedAt: "2026-10-26T12:04:00.000Z",
+      rank: null,
+    }
+    const unverified = renderToStaticMarkup(
+      createElement(ChallengeStatus, { view: challengeView({ phase: "success", attempt: 1, result, replayed: false }) }),
+    )
+    expect(unverified).toContain("Stored, not verified")
+    expect(unverified).toContain("server score")
+    expect(unverified).not.toContain("verified peak mass")
   })
 
   it("renders no retry button when a retry cannot help", () => {

@@ -14,7 +14,7 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_GW_DEBUG: process.env.NEXT_PUBLIC_GW_DEBUG ?? "",
     // Empty in every normal build. A loopback API base here turns on the local verified-run
-    // experiment; without it the page is byte-for-byte the game it was.
+    // experiment; without it the page renders no extra UI and makes no request.
     NEXT_PUBLIC_GW_CHALLENGE_API: process.env.NEXT_PUBLIC_GW_CHALLENGE_API ?? "",
   },
   trailingSlash: true,

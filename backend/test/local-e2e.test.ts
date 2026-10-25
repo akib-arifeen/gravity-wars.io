@@ -91,6 +91,8 @@ describe.skipIf(!BASE)("local challenge API end to end", () => {
     expect(descriptor.assisted).toBe(false)
     expect(descriptor.ranked).toBe(true)
     expect(descriptor.challenge.rulesetVersion).toBeGreaterThan(0)
+    // The client refuses a descriptor whose submission path does not address its own run.
+    expect(descriptor.submission.path).toBe(`/v1/daily/runs/${descriptor.runId}/submissions`)
 
     const run = recordRun(descriptor)
     expect(run.steps).toBeGreaterThan(0)
