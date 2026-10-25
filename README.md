@@ -6,12 +6,14 @@ Play it: https://gravity-warsio.vercel.app
 
 ## Modes
 
+- **First run** starts on **Easy** in the **Classic** arena, and the menu remembers whatever you pick from then on. That first-run pair is for a browser with no saved play at all: with any saved record but no stored choice (an older build never stored a skill), the menu opens on **Normal** and the **Random** arena instead, so it never guesses that a returning player is a newcomer. A stored choice is applied in the same commit that hydrates, before that first paint, so the menu is already yours when it becomes live; the exported HTML itself is the first-run menu until the page hydrates, so this shortens the swap rather than removing the window entirely. The in-game HUD shows live speed, `Esc` pauses to a screen that re-reads the controls, and the first death of an Endless round adds one tip.
 - **Endless** (the default) never ends.
   - You respawn a few seconds after you die, and your best score for the session is kept.
   - Bots of varied skill join and leave all the time, and they get tougher as you grow.
   - A live leaderboard ranks everyone by mass, and the #1 body wears a crown.
   - The camera keeps following the leader while you wait to respawn, so the arena visibly carries on without you.
-- **Round** is a 3-minute match against 3, 5 or 7 bots (Easy, Normal, Hard). You win by reaching 130 mass first or by being the last one left. If the clock runs out, the heaviest body wins.
+- **Round** is a 2:30 match against 3, 5 or 7 bots (Easy, Normal, Hard); in The Vast the clock runs 1.4x as long, 3:30, and Random can give you either. You win by reaching 130 mass first, the same goal on every skill, or by being the last one left. If the clock runs out, the heaviest body wins.
+  - Why 130 everywhere: with every rival flown by the game's own bot brains over 12 seeds, an Easy-skill reference peaks 92-194 (median 131) and reaches 130 in 6 of 12 rounds; racing to it, the reference wins 4 of 12, and some rounds still go to the clock. A 90 goal won the same 4 of 12 but ended all 12 by mass at a median of 90 s, so it made the round shorter, not easier. This is simulated low-skill play, not a claim about how difficult the game feels to a person.
 - **Campaign: The Long Fall** is twelve levels in three sectors against a fixed field, with three bosses.
   - Every level has a goal, a bonus objective and a hidden relic: up to three stars per level.
   - Stars unlock **Dash** (1 star), **Repulse** (3 stars) and the **Singularity** (6 stars) inside the campaign.

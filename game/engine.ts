@@ -1348,7 +1348,8 @@ export function rankOf(world: World, id: string): number {
  * from assist.ts plus the surge timer/multiplier; escalating =
  * arenaRadius < arenaBase; arena = world.arena; mode = world.mode; endless = world.endless ?
  * {respawnIn, best, deaths, kills, lastKiller: name of lastKillerId's body or ""} : null;
- * leaderboard = leaderboard(world, 10); the rest mirrors the player body.
+ * leaderboard = leaderboard(world, 10); speed = the player's speed |v| in u/s; the rest mirrors
+ * the player body.
  */
 export function hudSnapshot(world: World): HudSnapshot {
   const p = world.bodies[0]
@@ -1364,6 +1365,7 @@ export function hudSnapshot(world: World): HudSnapshot {
     energy: p.energy,
     energyMax: CONFIG.energy.max,
     criticalMass: world.roundCriticalMass,
+    speed: Math.hypot(p.vx, p.vy),
     rank: rankOf(world, "player"),
     alive,
     total: world.bodies.length,

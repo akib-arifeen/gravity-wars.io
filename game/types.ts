@@ -494,6 +494,8 @@ export interface HudSnapshot {
   energy: number
   energyMax: number
   criticalMass: number
+  /** The player's current speed (u/s), for the live readout. */
+  speed: number
   /** 1-based rank by mass among living bodies (player included); 0 if the player is dead. */
   rank: number
   alive: number

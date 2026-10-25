@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { emptyProfile, loadProfile, type AchievementDef } from "@/game/achievements"
 import { ARENA_IDS } from "@/game/arenas"
 import { createSfx, type Sfx } from "@/game/audio"
@@ -45,6 +45,7 @@ import {
   type MenuMode,
 } from "./components/Screens"
 import { Toasts, type ToastItem } from "./components/Toasts"
+import { ARENA_KEY, DIFFICULTY_KEY, hasPlayHistory, startDefaults } from "./startDefaults"
 
 type Screen = "menu" | "playing" | "paused" | "over"
 
@@ -57,7 +58,6 @@ interface Outcome {
 }
 
 const MUTE_KEY = "gw:muted"
-const ARENA_KEY = "gw:arena"
 const MODE_KEY = "gw:mode"
 const TOAST_MS = 3500
 /** The cosmetic reward for recovering every hidden relic. */
@@ -71,13 +71,25 @@ function newSeed(): number {
   return (Date.now() + Math.floor(Math.random() * 1000003)) % 2147483647
 }
 
+const FIRST_RUN = startDefaults({})
+
+/**
+ * Apply the stored menu choices in the same commit that hydrates, before the browser paints it, so
+ * the menu is already the returning player's when it first becomes live: the first-run values are
+ * replaced before the next paint and before any click can land. This cannot remove the served
+ * markup, which a static export always writes as the first-run menu until the client hydrates; it
+ * only means the swap happens inside hydration rather than visibly after it. A plain effect would
+ * paint the first-run menu first and then change it under the player.
+ */
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect
+
 export default function Page() {
   const [screen, setScreen] = useState<Screen>("menu")
-  const [difficulty, setDifficulty] = useState<Difficulty>("normal")
+  const [difficulty, setDifficulty] = useState<Difficulty>(FIRST_RUN.difficulty)
   const [seed, setSeed] = useState(1)
   const [runId, setRunId] = useState(0)
   const [muted, setMuted] = useState(false)
-  const [arena, setArena] = useState<ArenaChoice>("random")
+  const [arena, setArena] = useState<ArenaChoice>(FIRST_RUN.arena)
   const [roundArena, setRoundArena] = useState<ArenaId>("classic")
   const [mode, setMode] = useState<MenuMode>("endless")
   const [roundMode, setRoundMode] = useState<GameMode>("endless")
@@ -92,6 +104,7 @@ export default function Page() {
   const [dailyRunConfig, setDailyRunConfig] = useState<DailyConfig | null>(null)
   const [boss, setBoss] = useState<BossHud | null>(null)
   const [deathText, setDeathText] = useState("")
+  const [deathTip, setDeathTip] = useState("")
   const [profileTick, setProfileTick] = useState(0)
   const [showProfile, setShowProfile] = useState(false)
   const [toasts, setToasts] = useState<ToastItem[]>([])
@@ -160,17 +173,29 @@ export default function Page() {
     }
   }, [])
 
-  // Restore persisted mute and detect a touch-first device.
-  useEffect(() => {
+  // Restore the stored menu choices inside hydration, so a returning player never sees the menu
+  // change under them once it is live. `hasPlayHistory` is why a missing `gw:difficulty` alone does
+  // not make a veteran a newcomer — and why a mode tab click alone does not make one a veteran.
+  useIsoLayoutEffect(() => {
     try {
-      if (window.localStorage.getItem(MUTE_KEY) === "1") setMuted(true)
-      const a = window.localStorage.getItem(ARENA_KEY)
-      if (a && (ARENA_CHOICES as string[]).includes(a)) setArena(a as ArenaChoice)
-      const m = window.localStorage.getItem(MODE_KEY)
+      const s = window.localStorage
+      if (s.getItem(MUTE_KEY) === "1") setMuted(true)
+      const start = startDefaults({
+        difficulty: s.getItem(DIFFICULTY_KEY),
+        arena: s.getItem(ARENA_KEY),
+        hasHistory: hasPlayHistory((key) => s.getItem(key)),
+      })
+      setDifficulty(start.difficulty)
+      setArena(start.arena)
+      const m = s.getItem(MODE_KEY)
       if (m === "round" || m === "endless" || m === "campaign" || m === "daily") setMode(m)
     } catch {
-      // Storage blocked: stay unmuted, default arena.
+      // Storage blocked: stay unmuted, on the first-run defaults.
     }
+  }, [])
+
+  // Restore the saved record and detect a touch-first device.
+  useEffect(() => {
     let stored: Storage | null = null
     try {
       stored = window.localStorage
@@ -242,6 +267,16 @@ export default function Page() {
     }
   }, [])
 
+  const chooseDifficulty = useCallback((d: Difficulty) => {
+    sfxRef.current?.ui("click")
+    setDifficulty(d)
+    try {
+      window.localStorage.setItem(DIFFICULTY_KEY, d)
+    } catch {
+      // Not persisted.
+    }
+  }, [])
+
   const chooseMode = useCallback((m: MenuMode) => {
     sfxRef.current?.ui("click")
     setMode(m)
@@ -298,6 +333,7 @@ export default function Page() {
         opts.kind === "campaign" ? ABILITY_UNLOCKS.filter((a) => unlockedNow.indexOf(a.id) < 0).map((a) => a.id) : [],
       )
       setDeathText("")
+      setDeathTip("")
       topRef.current = null
       setToasts([])
       setBoss(null)
@@ -333,6 +369,14 @@ export default function Page() {
 
   // The menu's Play button: whichever mode is selected.
   const play = useCallback(() => {
+    // Pressing Play is the explicit choice: store the pair the menu resolved to, so the next visit
+    // opens on it even if the player never tapped the segmented controls. No click sound here.
+    try {
+      window.localStorage.setItem(DIFFICULTY_KEY, state.current.difficulty)
+      window.localStorage.setItem(ARENA_KEY, state.current.arena)
+    } catch {
+      // Not persisted; the choice still applies for this session.
+    }
     const m = state.current.mode
     if (m === "campaign") {
       playLevel(state.current.campaignLevel)
@@ -594,7 +638,10 @@ export default function Page() {
           level={runKind === "campaign" ? roundLevel : null}
           lockedAbilities={roundLocked}
           playerColor={skin}
-          onDeath={setDeathText}
+          onDeath={(text, tip) => {
+            setDeathText(text)
+            setDeathTip(tip)
+          }}
           onBoss={setBoss}
           onNotice={onNotice}
           profile={profileRef.current}
@@ -624,6 +671,7 @@ export default function Page() {
           muted={muted}
           layout={layout}
           deathText={deathText}
+          deathTip={deathTip}
           onPress={(k) => inputRef.current?.press(k)}
           onPause={pauseNow}
           onToggleMute={toggleMute}
@@ -632,10 +680,7 @@ export default function Page() {
       {screen === "menu" && (
         <MenuScreen
           difficulty={difficulty}
-          onDifficulty={(d) => {
-            sfxRef.current?.ui("click")
-            setDifficulty(d)
-          }}
+          onDifficulty={chooseDifficulty}
           onPlay={play}
           muted={muted}
           onToggleMute={toggleMute}
@@ -660,7 +705,9 @@ export default function Page() {
         <ProfilePanel profile={profileRef.current} onClose={() => setShowProfile(false)} />
       )}
       {screen !== "menu" && <Toasts items={toasts} layout={layout} />}
-      {screen === "paused" && <PauseScreen onResume={resume} onRestart={playAgain} onQuit={toMenu} />}
+      {screen === "paused" && (
+        <PauseScreen layout={layout} onResume={resume} onRestart={playAgain} onQuit={toMenu} />
+      )}
       {screen === "over" && outcome && (
         <EndScreen
           result={outcome.result}

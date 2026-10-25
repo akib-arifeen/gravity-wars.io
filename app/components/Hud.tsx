@@ -10,7 +10,7 @@ import { FEED_MAX, type FeedItem, type FeedView } from "@/game/feed"
 import type { AbilityId } from "@/game/campaign"
 import type { LeaderboardEntry } from "@/game/types"
 import { AbilityIcon, LockIcon, WallIcon } from "./Icons"
-import { centreHud, dashName, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, type HudMode } from "./hudView"
+import { centreHud, dashName, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, speedCapText, speedLine, speedValue, BURN_TIP, type HudMode } from "./hudView"
 
 /** Campaign context the HUD shows: the level badge and its goal. */
 export interface CampaignHud {
@@ -34,6 +34,8 @@ interface HudProps {
   onPress(kind: "dash" | "repulse" | "ult"): void
   /** Endless: why the player died, for the respawn overlay. */
   deathText?: string
+  /** Endless: the one teaching line for the first respawn of a round, or "". */
+  deathTip?: string
   /** The boss encounter's bar, or null. */
   boss?: BossHud | null
   /** Campaign only: level name, goal and clock. */
@@ -70,7 +72,7 @@ function SpeakerIcon({ muted }: { muted: boolean }) {
   )
 }
 
-export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress, deathText = "", boss = null, campaign = null, lockedAbilities = [] }: HudProps) {
+export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress, deathText = "", deathTip = "", boss = null, campaign = null, lockedAbilities = [] }: HudProps) {
   const [showGo, setShowGo] = useState(false)
   const [wallBanner, setWallBanner] = useState(false)
   const [lbOpen, setLbOpen] = useState(false)
@@ -160,6 +162,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const energyPct = hud ? Math.min(100, Math.max(0, (hud.energy / hud.energyMax) * 100)) : 0
   const energyLow = hud ? hud.energy < CONFIG.energy.lowThreshold : false
   const timeCritical = hud ? hud.phase === "playing" && hud.timeLeft <= 10 : false
+  // The surge ceiling, if any: a narrow phone drops this before it drops the number itself.
+  const speedCap = hud ? speedCapText(hud.assist.surge, hud.assist.surgeMul) : ""
 
   const status: string[] = []
   if (hud?.pulling) status.push("PULLING")
@@ -235,7 +239,7 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
         <>
           <div className="gw-hud-leftcol">
             <div className="gw-hud-panel gw-hud-left">
-              <div className="gw-hud-label">{ed ? "SCORE" : campaign ? "MASS / GOAL" : "MASS"}</div>
+              <div className="gw-hud-label">{campaign ? "MASS / GOAL" : "MASS"}</div>
               <div className="gw-hud-mass">
                 <span className="gw-hud-mass-value">{Math.round(hud.mass)}</span>
                 {!ed && !campaign && <span className="gw-hud-mass-max"> / {hud.criticalMass}</span>}
@@ -317,6 +321,27 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                 )}
               </div>
             ) : null}
+            {/* Live speed: the body's absolute speed, shown so "DASH ALONG PATH" has a visible
+                payoff. It is not the figure a burn is graded on — the engine grades a pass
+                relative to the well — and the surge multiplier beside it is the temporary speed
+                ceiling, not a measured ratio. Not a live region (it changes at 10 Hz); the
+                aria-live status paragraph below stays the only thing that speaks. */}
+            {hud.phase !== "countdown" && (
+              <div className="gw-hud-speed">
+                {/* The whole line for assistive tech; the parts below are what a narrow phone can
+                    trim. Not a live region, so the visible split never announces twice. */}
+                <span className="gw-sr-only">{speedLine(hud.speed, hud.assist.surge, hud.assist.surgeMul)}</span>
+                <span aria-hidden="true" className="gw-speed-prefix">
+                  SPEED{" "}
+                </span>
+                <span aria-hidden="true">{speedValue(hud.speed)}</span>
+                {speedCap && (
+                  <span aria-hidden="true" className="gw-speed-cap">
+                    {speedCap}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {bossActive && boss && <BossBar boss={boss} />}
@@ -407,6 +432,7 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
             <div className="gw-death-stats">
               Best {Math.round(ed.best)} &middot; Kills {ed.kills}
             </div>
+            {deathTip && <div className="gw-death-tip">{deathTip}</div>}
           </div>
         </div>
       )}
@@ -419,7 +445,12 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
           <div key={countdownLabel} className="gw-countdown-num">
             {countdownLabel}
           </div>
-          {!campaign && <div className="gw-countdown-hint">Green ring = you can absorb it. Red ring = it can absorb you.</div>}
+          {!campaign && (
+            <>
+              <div className="gw-countdown-hint">{BURN_TIP}</div>
+              <div className="gw-countdown-hint">Green ring = you can absorb it. Red ring = it can absorb you.</div>
+            </>
+          )}
         </div>
       )}
       {hud && hud.phase !== "countdown" && showGo && (

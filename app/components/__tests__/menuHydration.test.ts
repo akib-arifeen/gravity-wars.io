@@ -11,8 +11,8 @@ import { MenuScreen } from "../Screens"
 const noop = () => {}
 
 const DESKTOP_CONTROLS =
-  "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
-const TOUCH_CONTROLS = "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
+  "WASD or hold the mouse to thrust · Space or right-click to pull · Shift = DASH ALONG PATH · E repulse · Q Singularity · Esc pauses"
+const TOUCH_CONTROLS = "Drag on the left to steer · hold PULL · tap the glowing DASH, REPULSE and ULT"
 
 function menu(layout: "desktop" | "touch") {
   return createElement(MenuScreen, {

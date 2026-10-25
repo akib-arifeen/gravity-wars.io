@@ -30,6 +30,8 @@ import { createInput, type InputController } from "@/game/input"
 import { createRenderer, type RenderFrame, type RenderView } from "@/game/render"
 import type { Sfx } from "@/game/audio"
 import { deathLine } from "./Screens"
+import { firstDeathTip, ultHintDue, ultHintNotice } from "./hudView"
+import { roundCriticalMass } from "@/app/roundSetup"
 import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, Intent, RoundResult, World } from "@/game/types"
 import { TouchControls } from "./TouchControls"
 
@@ -81,8 +83,9 @@ export interface GameViewProps {
   demo?: boolean
   /** Layout known by the page (covers hybrid devices that have already seen touch). */
   initialLayout?: "desktop" | "touch"
-  /** Endless: the player died; `text` is the death line for the respawn overlay. */
-  onDeath?(text: string): void
+  /** Endless: the player died; `text` is the death line for the respawn overlay, `tip` the one
+   * teaching line for the first death of the round (empty afterwards). */
+  onDeath?(text: string, tip: string): void
   /** Lifetime profile, mutated in place by achievement tracking (never in demo mode). */
   profile?: Profile
   /** Achievements unlocked mid-round, for toasts. */
@@ -164,11 +167,16 @@ export function GameView(props: GameViewProps) {
       arena: pickArena(),
       mode,
       botCount: level ? level.bots : undefined,
-      // Only the "reach critical mass" level keeps the engine's race; other campaign levels run on
-      // their own goal and clock.
-      criticalMass: level && level.goal.kind !== "criticalMass" ? 1e9 : undefined,
+      // The mass race is on for Round, Endless and the critical-mass level; a campaign level with
+      // its own goal turns it off. See app/roundSetup.ts.
+      criticalMass: roundCriticalMass(level),
     })
     let goalReached = false
+    // Unready-Singularity feedback: the last time one was announced, and the minimum gap between
+    // announcements (a mash gets one answer per gap, not one per press).
+    let lastUltHint = -1e9
+    // The respawn teaching line is for the first death of this round only.
+    let deathsSeen = 0
     let encounter: EncounterState | null = null
     if (level && !demo) encounter = applyCampaignLevel(world, level)
     const skin = props.playerColor
@@ -509,6 +517,13 @@ export function GameView(props: GameViewProps) {
               if (locked.indexOf("repulse") >= 0) raw.repulse = false
               if (locked.indexOf("ult") >= 0) raw.ult = false
             }
+            // An unready Singularity used to swallow the press silently, which reads as a broken
+            // button. Answer it once with the charge, at most every few seconds: a press is
+            // immediate feedback, the rate limit keeps a mash from stacking toasts.
+            if (ultHintDue(raw.ult === true, player.ult, now, lastUltHint) && !demo) {
+              lastUltHint = now
+              notify(ultHintNotice(player.ult))
+            }
             intents.set("player", raw)
           }
           // The boss runs on the same Intent seam as every other body; its state machine lives in
@@ -611,7 +626,11 @@ export function GameView(props: GameViewProps) {
                 }
               }
             } else if (ev.type === "death" && ev.bodyId === "player" && world.mode === "endless") {
-              propsRef.current.onDeath?.(deathText(world, ev.cause))
+              // The tip rides along with the first death only: the overlay already appears every
+              // respawn, and a teaching line that repeats on every death becomes noise.
+              const tip = firstDeathTip(deathsSeen, ev.cause)
+              deathsSeen++
+              propsRef.current.onDeath?.(deathText(world, ev.cause), tip)
               forceHud = true
             }
             if (ev.type === "phase") forceHud = true

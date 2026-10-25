@@ -247,7 +247,19 @@ export const CONFIG = {
     duration: 150,
     /** Countdown before physics starts (s). */
     countdown: 3,
-    /** First body to reach this mass wins the round. */
+    /**
+     * First body to reach this mass wins the round. The default for campaign levels, and the
+     * Round goal on every difficulty.
+     *
+     * Measured with every rival driven by the game's own bot brains (12 seeds, 150 s, no race so
+     * the goal cannot truncate the number): the Easy reference — an Easy brain flying the player's
+     * body — peaks 92-194 (median 131) and reaches 130 in 6/12 runs. Racing to 130 it wins 4/12:
+     * 10 rounds end by mass, one by the clock and one by the reference's death. Lowering Easy's
+     * goal to 90 did not improve that win rate (4/12) and made all 12 rounds end by mass at a
+     * median of 90 s, turning a low-skill round into a short sprint instead of an easier one.
+     * An earlier note here claimed the Easy reference never reached 130; that harness left every
+     * rival idle, so the player was the only body that grew. See roundGoal.test.ts.
+     */
     criticalMass: 130,
   },
 
