@@ -1,0 +1,19 @@
+{
+  "name": "gravity-wars-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cf dev",
+    "build": "cf build",
+    "deploy": "cf deploy",
+    "typecheck": "cf workers types && tsc -p tsconfig.json",
+    "migrate:local": "cf d1 migrations apply 2f6e1a4c-9b3d-4c7e-8a10-5d2c9f7b4e61 --local --persist-to .cloudflare/state"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "beta",
+    "@types/node": "^22",
+    "cf": "^1.0.0-beta.21",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0"
+  }
+}
