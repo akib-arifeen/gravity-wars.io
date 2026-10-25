@@ -2481,13 +2481,14 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       g.fillRect(0, 0, W, H)
       g.globalAlpha = 1
     }
-    // Flyby telegraph: the dash is only the burn inside the periapsis window. Drawn above the
-    // player in screen space so it stays legible at any zoom (and needs no HUD element).
+    // Flyby telegraph: only a PROGRADE dash inside the periapsis window is the burn, so the prompt
+    // names the direction. Drawn above the player in screen space so it stays legible at any zoom
+    // (and needs no HUD element).
     if (player && player.alive) {
       const v = assistView(world, player)
       if (burnPromptVisible(v.window, player.dashCd, player.energy, dashLocked)) {
         // Clamp to the viewport so the prompt can never clip at an edge (or run under the HUD edge).
-        const label = touch ? "BURN" : "BURN  SHIFT"
+        const label = touch ? "PROGRADE BURN" : "PROGRADE BURN  SHIFT"
         g.font = "700 13px " + FONT
         const half = g.measureText(label).width / 2
         const pad = 10
