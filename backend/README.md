@@ -237,7 +237,9 @@ Codes include `INVALID_REQUEST`, `INVALID_JSON`, `PAYLOAD_TOO_LARGE`,
   sweeps both in bounded batches — at most 500 rows per statement, 8 statements per table per
   event, and a 2 s wall-clock budget — and the hourly cron trigger in `cloudflare.config.ts` calls
   it. Whatever a bounded event leaves behind is picked up by the next one, and the handler logs
-  whether work is still pending. Tokens and nonces are stored only as digests.
+  whether work is still pending. `runs` and `replay_cache` are *not* swept: both stop being useful
+  within the run's 2 h lifetime, so they are the next retention decision rather than part of this
+  one. Tokens and nonces are stored only as digests.
   Leaderboard rows carry `rank`, `score`, `submittedAt` and `assisted` only: no names, ids, IPs,
   client ids or hashes.
 
