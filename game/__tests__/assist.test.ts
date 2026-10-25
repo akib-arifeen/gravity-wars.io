@@ -3,7 +3,15 @@
 // this path) and use the shared helpers.
 
 import { describe, expect, it } from "vitest"
-import { assistView, assistWindow, burnPromptVisible, grantSurge, tickAssist, type BurnReady } from "../assist"
+import {
+  assistView,
+  assistWindow,
+  burnPromptVisible,
+  dashAimedAtBurn,
+  grantSurge,
+  tickAssist,
+  type BurnReady,
+} from "../assist"
 import { applyCampaignLevel, bossIntent, updateBoss } from "../boss"
 import { botIntent, createBotBrain } from "../bots"
 import { emptyProgress, levelById, unlockedAbilities } from "../campaign"
@@ -228,6 +236,102 @@ describe("assist: the timed dash window", () => {
   })
 })
 
+describe("assist: the advertised window is the difficulty-scaled one", () => {
+  // The prompt must mean exactly one thing: dashing on it is the burn. The HUD advertises
+  // assistWindow(body) = CONFIG.assist.window * difficulty.assistWindowMul, so the grader must use
+  // that same window. Using the unscaled value pays the wrong reward at Easy's earliest advertised
+  // frame (the legacy fast-pass perk instead of the burn) and, at Hard, suppresses the legacy perk
+  // for a dash it then refuses to grade.
+
+  it("Easy: a dash on the very first advertised frame is the burn, not the legacy perk", () => {
+    const { w, b } = flybyWorld({ difficulty: "easy" })
+    let first = -1
+    let periIn = 0
+    for (let i = 0; i < 400 && first < 0; i++) {
+      const v = assistView(w, b)
+      if (v.window) {
+        first = i
+        periIn = v.periIn ?? 0
+      } else step(w, { player: pilot(b) })
+    }
+    expect(first, "Easy advertises a frame").toBeGreaterThanOrEqual(0)
+    // The regression: this frame is inside Easy's window and outside the unscaled one.
+    expect(periIn).toBeGreaterThan(CONFIG.assist.window)
+    expect(periIn).toBeLessThanOrEqual(assistWindow(b))
+
+    let burns = 0
+    let slingshots = 0
+    for (let i = 0; i < 400; i++) {
+      step(w, { player: pilot(b, i === 0) })
+      burns += eventsOf(w, "oberth").length
+      slingshots += eventsOf(w, "slingshot").length
+    }
+    expect(burns).toBe(1)
+    expect(b.stats.oberths).toBe(1)
+    // A graded burn keeps the same flyby out of the legacy count; one reward, never two.
+    expect(b.stats.slingshots).toBe(0)
+    expect(slingshots).toBe(0)
+  })
+
+  it("Hard: an unscaled-window frame does not burn and still pays the legacy perk", () => {
+    // Ticks 111-114 of this fixture put periIn at 0.30-0.31 s: inside CONFIG.assist.window (0.35)
+    // but outside Hard's 0.2625, so Hard never advertises them and the dash is not a burn. The dash
+    // is prograde and still fast and close enough for the legacy fast-pass perk, which must pay: a
+    // dash that is not an eligible burn aim must not suppress it.
+    for (const tick of [111, 112]) {
+      const { w, b } = flybyWorld({ difficulty: "hard" })
+      let advertised = false
+      let burns = 0
+      let slingshots = 0
+      for (let i = 0; i <= tick; i++) {
+        if (assistView(w, b).window) advertised = true
+        step(w, { player: pilot(b, i === tick) })
+        burns += eventsOf(w, "oberth").length
+        slingshots += eventsOf(w, "slingshot").length
+      }
+      expect(advertised, `tick ${tick}: never advertised at Hard`).toBe(false)
+      expect(b.assist.pass.dashPrograde, `tick ${tick}: the dash itself was prograde`).toBe(true)
+      expect(dashAimedAtBurn(b), `tick ${tick}: not an eligible burn aim`).toBe(false)
+      expect(burns, `tick ${tick}: no burn`).toBe(0)
+      expect(b.stats.oberths).toBe(0)
+      expect(b.assist.surge).toBe(0)
+      expect(slingshots, `tick ${tick}: the legacy perk still pays`).toBe(1)
+      expect(b.stats.slingshots).toBe(1)
+    }
+  })
+})
+
+describe("assist: only a prograde or tangential dash is a burn", () => {
+  it("a retrograde dash on an advertised frame never burns and suppresses nothing", () => {
+    // The prompt is explicit: it names the direction. A dash aimed against the motion is a pure
+    // movement tool even in the window: it must not pay, and it must not deny the legacy perk.
+    const { w, b } = flybyWorld()
+    let first = -1
+    for (let i = 0; i < 300 && first < 0; i++) {
+      if (assistView(w, b).window) first = i
+      else step(w, { player: pilot(b) })
+    }
+    expect(first, "the burn prompt is up").toBeGreaterThanOrEqual(0)
+    expect(b.energy).toBeGreaterThanOrEqual(CONFIG.abilities.dash.cost)
+
+    const s = Math.hypot(b.vx, b.vy)
+    step(w, { player: { ax: -b.vx / s, ay: -b.vy / s, pull: false, dash: true } })
+    expect(b.assist.pass.dashPrograde, "the dash is retrograde").toBe(false)
+    expect(dashAimedAtBurn(b), "a retrograde dash is not a burn aim").toBe(false)
+    expect(b.slingCd, "the legacy perk was not suppressed").toBe(0)
+
+    let burns = 0
+    for (let i = 0; i < 300; i++) {
+      step(w, { player: pilot(b) })
+      burns += eventsOf(w, "oberth").length
+    }
+    expect(burns).toBe(0)
+    expect(b.stats.oberths).toBe(0)
+    expect(b.assist.surge).toBe(0)
+    expect(b.assist.surgeMul).toBe(1)
+  })
+})
+
 describe("assist: a dash cannot manufacture the periapsis it is graded on", () => {
   // The review fixture: star at the origin, body at (-700, 200) at 340 u/s under prograde thrust.
   // Flown with no dash at all it crosses one real periapsis; that measurement is the baseline and
@@ -250,38 +354,43 @@ describe("assist: a dash cannot manufacture the periapsis it is graded on", () =
     expect(b.assist.surge).toBe(0)
   })
 
-  it("an outward dash on the approach pays nothing and never becomes the periapsis", () => {
+  it("an outward (retrograde) dash on the approach pays nothing", () => {
+    // Aiming away from the well while still approaching is retrograde, so it can never be a burn.
+    // prevVr now holds the dash-free radial value, so the next step records the crossing the
+    // dash-free motion really had instead of hiding it; grade() then rejects that crossing on
+    // direction and timing. What has to stay true is the payoff: zero.
     const { w, well, b } = flybyWorld()
     const dashTick = Math.round(1.6 / DT)
     let burns = 0
-    let sawPeri = false
+    let retrograde = false
     for (let i = 0; i <= dashTick; i++) {
       if (i === dashTick) {
         const dx = b.x - well.x
         const dy = b.y - well.y
         const d = Math.hypot(dx, dy) || 1
         step(w, { player: { ax: dx / d, ay: dy / d, pull: false, dash: true } })
+        retrograde = !b.assist.pass.dashPrograde
       } else {
         step(w, { player: pilot(b) })
       }
       burns += eventsOf(w, "oberth").length
-      if (b.assist.pass.periAt >= 0) sawPeri = true
     }
     // Let the pass run out: the outward impulse must not be graded as a periapsis at 253 u.
     for (let i = 0; i < 240; i++) {
       step(w, { player: pilot(b) })
       burns += eventsOf(w, "oberth").length
-      if (b.assist.pass.periAt >= 0) sawPeri = true
     }
+    expect(retrograde, "the outward aim is retrograde on this approach").toBe(true)
     expect(burns).toBe(0)
-    expect(sawPeri, "the dash did not create a periapsis").toBe(false)
     expect(b.assist.surge).toBe(0)
     expect(b.stats.oberths).toBe(0)
   })
 
-  it("a slow radial fall is not converted into a periapsis by an outward dash", () => {
+  it("a slow radial fall is not rewarded through an outward (retrograde) dash", () => {
     // Inside the band, closing at only 100 u/s with a tangential component: a real (if shallow)
-    // pass. The outward dash would have flipped the radial sign on the spot.
+    // pass. The outward dash flips the radial sign on the spot, which used to be hidden from the
+    // flip test; prevVr now records the dash-free crossing, so grade() sees it — and rejects it,
+    // because the outward aim is retrograde. The reward must stay zero either way.
     const build = () => {
       const w = controlledWorld({ botCount: 0 })
       const well = addWell(w, "star", 0, 0)
@@ -308,7 +417,7 @@ describe("assist: a dash cannot manufacture the periapsis it is graded on", () =
     const { w, well, b } = build()
     let opened = -1
     let burns = 0
-    let sawPeri = false
+    let retrograde = false
     for (let i = 0; i < 200; i++) {
       if (opened < 0 && b.assist.pass.wellId !== "") opened = i
       const dash = opened >= 0 && i === opened + 2
@@ -320,13 +429,14 @@ describe("assist: a dash cannot manufacture the periapsis it is graded on", () =
         intent = { ax: dx / d, ay: dy / d, pull: false, dash: true }
       }
       step(w, { player: intent })
+      if (dash) retrograde = !b.assist.pass.dashPrograde
       burns += eventsOf(w, "oberth").length
-      if (b.assist.pass.periAt >= 0) sawPeri = true
     }
     expect(opened).toBeGreaterThanOrEqual(0)
+    expect(retrograde, "the outward aim is retrograde on this fall").toBe(true)
     expect(burns).toBe(0)
-    expect(sawPeri).toBe(false)
     expect(b.stats.oberths).toBe(0)
+    expect(b.assist.surge).toBe(0)
   })
 
   it("still pays a prograde dash shortly before the natural periapsis", () => {
@@ -341,6 +451,54 @@ describe("assist: a dash cannot manufacture the periapsis it is graded on", () =
     const r = runFlyby({}, [late])
     expect(r.burns).toHaveLength(1)
     expect(r.b.stats.oberths).toBe(1)
+  })
+
+  it("an outward-radial but prograde dash one genuine tick early still pays exactly once", () => {
+    // prevVr must be the dash-free radial value the flip test used. On this frame the aim is
+    // mostly outward (it flips the real radial velocity on the spot) but still prograde, so the
+    // pass is a genuine, prompt-advertised burn: the crossing it is graded on happens on the next
+    // step, from the dash-free sign stored here. Storing the post-impulse value instead would
+    // leave prevVr positive, the next step could never see prevVr < 0, and this real flyby would
+    // silently never pay.
+    const { w: probe, well: probeWell, b: probeBody } = flybyWorld()
+    let peri = -1
+    for (let i = 0; i < 600 && peri < 0; i++) {
+      step(probe, { player: pilot(probeBody) })
+      if (probeBody.assist.pass.stage === "out") peri = i
+    }
+    expect(peri, "the reference pass has a periapsis").toBeGreaterThan(0)
+    expect(probeWell.id).toBe(probeBody.assist.pass.wellId)
+
+    const { w, well, b } = flybyWorld()
+    const dashTick = peri - 8
+    for (let i = 0; i < dashTick; i++) step(w, { player: pilot(b) })
+    const view = assistView(w, b)
+    expect(view.window, "the burn prompt is up on the dash frame").toBe(true)
+
+    // Velocity direction plus half an outward radial unit: prograde (dot > 0) and clearly outward.
+    const vs = Math.hypot(b.vx, b.vy)
+    const dx = b.x - well.x
+    const dy = b.y - well.y
+    const d = Math.hypot(dx, dy)
+    let ax = b.vx / vs + 0.5 * (dx / d)
+    let ay = b.vy / vs + 0.5 * (dy / d)
+    const an = Math.hypot(ax, ay)
+    ax /= an
+    ay /= an
+    expect(ax * (b.vx - well.vx) + ay * (b.vy - well.vy), "the aim is prograde").toBeGreaterThan(0)
+
+    step(w, { player: { ax, ay, pull: false, dash: true } })
+    expect(b.assist.pass.dashPrograde, "the dash is prograde").toBe(true)
+    // The dash's own outward part flipped the real radial velocity, so the crossing is recorded on
+    // the next step from the dash-free sign kept in prevVr.
+    let burns = eventsOf(w, "oberth").length
+    for (let i = 0; i < 79; i++) {
+      step(w, { player: pilot(b) })
+      burns += eventsOf(w, "oberth").length
+    }
+    expect(burns, "exactly one burn").toBe(1)
+    expect(b.stats.oberths).toBe(1)
+    expect(b.assist.surge).toBeGreaterThan(0)
   })
 })
 
