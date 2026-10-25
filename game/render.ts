@@ -1141,8 +1141,8 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       const gd = sg.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2)
       gd.addColorStop(0, "rgba(255,170,100,0)")
       gd.addColorStop(Math.max(0, inner - 0.02), "rgba(255,150,80,0)")
-      gd.addColorStop(inner + 0.03, "rgba(255,160,90,0.05)")
-      gd.addColorStop(mid, "rgba(255,196,128,0.075)")
+      gd.addColorStop(inner + 0.03, "rgba(255,160,90,0.08)")
+      gd.addColorStop(mid, "rgba(255,196,128,0.12)")
       gd.addColorStop(1, "rgba(255,225,180,0)")
       sg.fillStyle = gd
       sg.fillRect(0, 0, S, S)
@@ -1257,9 +1257,10 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
         }
       }
     }
-    // 16 direction chevrons, tangent to the co-rotation.
-    g.fillStyle = "rgba(255,196,132,0.24)"
-    const size = 13
+    // 16 direction chevrons, tangent to the co-rotation. Below ~0.65 zoom (phones) they are
+    // clamped in screen space so they stay countable instead of shrinking to a few pixels.
+    g.fillStyle = "rgba(255,196,132,0.32)"
+    const size = Math.max(13, 8.5 / zoom)
     for (let i = 0; i < S.chevrons; i++) {
       const a = vis.chevronPhase + (i * TAU) / S.chevrons + spin
       const ca = Math.cos(a)
