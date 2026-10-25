@@ -2720,11 +2720,13 @@ body {
   }
 }
 
-/* The combined ceiling suffix ("×1.24 cap · current ×1.18") is wider than the gap between the
-   mass panel and the centre column on phones and small tablets, so it is dropped whole at <=679px
-   rather than allowed to push the speed value under the panel. The "SPEED" prefix goes last, at
-   <=359px. The sr-only copy inside the element carries the whole line at every width. */
-@media (max-width: 679px) {
+/* The combined ceiling suffix ("×1.24 cap · current ×1.18") would otherwise push the speed value
+   under the mass panel: measured against the panel, it overlaps from 420px through 660px and only
+   clears by 6px at 680px. The body font is system-ui, whose metrics differ by OS, so 6px is not a
+   margin to trust — the suffix is dropped whole below the 768px tablet width instead, where the
+   clearance is ~39px. The "SPEED" prefix goes last, at <=359px. The sr-only copy inside the
+   element carries the whole line at every width. */
+@media (max-width: 767px) {
   .gw-hud-speed .gw-speed-cap {
     display: none;
   }
