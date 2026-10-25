@@ -234,7 +234,7 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
     : false
 
   return (
-    <div className="gw-hud" data-mode={mode} inert={inert}>
+    <div className="gw-hud" data-mode={mode} data-layout={layout} inert={inert}>
       {hud && (
         <>
           <div className="gw-hud-leftcol">

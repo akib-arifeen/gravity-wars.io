@@ -2721,13 +2721,21 @@ body {
 }
 
 /* The combined ceiling suffix ("×1.24 cap · current ×1.18") would otherwise push the speed value
-   under the mass panel: measured against the panel, it overlaps from 420px through 660px and only
-   clears by 6px at 680px. The body font is system-ui, whose metrics differ by OS, so 6px is not a
-   margin to trust — the suffix is dropped whole below the 768px tablet width instead, where the
-   clearance is ~39px. The "SPEED" prefix goes last, at <=359px. The sr-only copy inside the
-   element carries the whole line at every width. */
+   under the mass panel. Measured against the panel's right edge: it overlaps from 420px through
+   660px, clears by 6px at 680px, and in the touch layout still overlaps at 768px and only clears
+   by 6px at 800px (the touch panel is 60px wider than the desktop one). The body font is
+   system-ui, whose metrics vary by OS, so 6px is not a margin to trust: below 768px the suffix is
+   dropped in every layout, and in the touch layout it stays dropped until 860px, where the
+   clearance is ~36px. Desktop at 768px keeps it with ~50px. The "SPEED" prefix goes last, at
+   <=359px. The sr-only copy inside the element carries the whole line at every width. */
 @media (max-width: 767px) {
   .gw-hud-speed .gw-speed-cap {
+    display: none;
+  }
+}
+
+@media (max-width: 859px) {
+  .gw-hud[data-layout="touch"] .gw-hud-speed .gw-speed-cap {
     display: none;
   }
 }
