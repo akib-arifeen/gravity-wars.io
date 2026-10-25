@@ -93,10 +93,14 @@ mechanisms bound what one request can cost:
 - **`replay_cache`**, keyed by `(run_id, trace_hash)`, stores the engine's own outcome and is
   written only after a replay reached the end of the round. A repeat submission of the *identical*
   trace — the honest retry after a rejected claim, or the loser of a concurrent race — reuses that
-  row instead of replaying; the response then carries `replayCached: true` and
-  `server-timing: replay;dur=0`. A different trace is a different key and is always replayed, and a
-  row is ignored unless its stored league and ruleset match the run. The cache never supplies a
-  score the engine did not itself produce.
+  row instead of replaying. The response then says exactly that and nothing more:
+  `replayCached: true`, `replayMs: null` (no replay ran, so there is no duration to report and
+  none is inferred from zero) and `server-timing: replay;desc="cached"`. A request that did replay
+  reports `replayCached: false`, its measured `replayMs` and `server-timing: replay;dur=<ms>`. A
+  different trace is a different key and is always replayed, and a row is ignored unless its
+  stored league and ruleset match the run. The cache never supplies a score the engine did not
+  itself produce, and the stored submission keeps `replay_ms` as the cost that produced its score,
+  never 0.
 - **`REPLAY_LIMITS`** in `src/replay.ts` is the per-request ceiling, enforced inside
   `replayDailyRun` so no caller can bypass it: `maxSteps` (12,782 — the longest round any arena can
   run, also advertised as `limits.maxTraceSteps`) and `maxReplayMs` (a 20 s wall-clock backstop,
@@ -162,7 +166,8 @@ Submission body:
 }
 ```
 
-Submission response (201 first write, 200 for a run already stored):
+Submission response (201 first write, 200 for a run already stored). `replayMs` is the duration
+*this request* spent replaying, and `null` when it reused a stored result:
 
 ```json
 {
@@ -237,9 +242,11 @@ Codes include `INVALID_REQUEST`, `INVALID_JSON`, `PAYLOAD_TOO_LARGE`,
   sweeps both in bounded batches — at most 500 rows per statement, 8 statements per table per
   event, and a 2 s wall-clock budget — and the hourly cron trigger in `cloudflare.config.ts` calls
   it. Whatever a bounded event leaves behind is picked up by the next one, and the handler logs
-  whether work is still pending. `runs` and `replay_cache` are *not* swept: both stop being useful
-  within the run's 2 h lifetime, so they are the next retention decision rather than part of this
-  one. Tokens and nonces are stored only as digests.
+  whether work is still pending. This sweep is bounded but not exhaustive: it only covers the two
+  tables whose rows have an expiry window. `runs` (useless after the run's 2 h lifetime),
+  `submissions` and `leagues` (the leaderboard's own history) and `replay_cache` also grow with
+  use, so their retention is a separate product decision rather than part of this one. Tokens and
+  nonces are stored only as digests.
   Leaderboard rows carry `rank`, `score`, `submittedAt` and `assisted` only: no names, ids, IPs,
   client ids or hashes.
 
@@ -249,6 +256,7 @@ Codes include `INVALID_REQUEST`, `INVALID_JSON`, `PAYLOAD_TOO_LARGE`,
 cd backend
 npm install
 cp .dev.vars.example .dev.vars    # then replace ACTOR_HASH_KEY with a random value
+rm -rf .cloudflare/state          # required: see the migration note below
 cf d1 migrations apply 2f6e1a4c-9b3d-4c7e-8a10-5d2c9f7b4e61 \
   --local --persist-to .cloudflare/state
 cf dev
@@ -256,9 +264,30 @@ cf dev
 
 `cf dev` serves the Worker at `http://localhost:5173` and uses
 `backend/.cloudflare/state/v3` for local D1. Both `.dev.vars` and `.cloudflare/` are ignored by
-git. `0001` was edited in place again while this worker is still local-only (no remote database
-exists, so there is no data to migrate); delete `backend/.cloudflare/state` before re-applying it
-if you had applied an earlier draft.
+git.
+
+**Fresh local state is mandatory.** `0001` gained `actor_id`, `ip_hash`, `replay_cache` and a new
+index on this branch while the Worker is still local-only, and no remote database exists to
+migrate. Re-applying it over a database created from the older `0001` cannot reshape the existing
+tables: the local file would keep `actor_hash` / `actor_id` columns in the old shape and every
+write would fail. Discard the local database before applying:
+
+```sh
+rm -rf backend/.cloudflare/state
+```
+
+**From here on, `0001` is frozen.** It is the migration a fresh database gets, and once this
+branch merges it will have been applied widely, so any later schema change is a new file —
+`0002_<what>.sql`, `0003_<what>.sql` — using SQLite's own statement for the job rather than a
+rewrite of history, e.g.
+
+```sql
+-- 0002_example.sql
+ALTER TABLE submissions RENAME COLUMN actor_id TO client_id;
+```
+
+Editing an already-applied migration silently diverges every database it reached, which is exactly
+what the fresh-state rule above exists to avoid until there is a real remote one to care about.
 
 Verification (from the repository root):
 

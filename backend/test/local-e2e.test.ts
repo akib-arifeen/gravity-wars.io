@@ -17,8 +17,19 @@ import { TraceRecorder } from "../../game/runTrace.ts"
 import type { ArenaId, Difficulty, Intent } from "../../game/types.ts"
 
 const BASE = (process.env.GW_E2E_BASE ?? "").replace(/\/+$/, "")
-/** This e2e's own client id, so a rerun against the same local database keeps one board row. */
-const ACTOR_ID = process.env.GW_E2E_ACTOR ?? "0123456789abcdef0123456789abcdef"
+/**
+ * A fresh client id per invocation, because the board keeps one row per client: a fixed id would
+ * make the second run of this file against the same local database collide with the first, and
+ * `personalBest` would legitimately be false. Pin `GW_E2E_ACTOR` only on a fresh database.
+ */
+const ACTOR_ID =
+  process.env.GW_E2E_ACTOR ?? crypto.randomUUID().replace(/-/g, "").padEnd(32, "0").slice(0, 32)
+/**
+ * A distinct request address per invocation too, so a rerun does not share the previous run's
+ * rate-limit bucket: the Worker reads `cf-connecting-ip` itself and there is no proxy locally.
+ */
+const ACTOR_IP =
+  process.env.GW_E2E_IP ?? `203.0.113.${(parseInt(ACTOR_ID.slice(0, 2), 16) % 254) + 1}`
 
 interface Descriptor {
   runId: string
@@ -36,6 +47,7 @@ interface SubmissionResult {
   score: number
   claimedScore: number
   traceSteps: number
+  replayMs: number | null
   verified: boolean
   verification: string
   ranked: boolean
@@ -80,7 +92,7 @@ function recordRun(descriptor: Descriptor): { trace: string; score: number; step
 }
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
-  return { "content-type": "application/json", "x-gw-actor": ACTOR_ID, ...extra }
+  return { "content-type": "application/json", "x-gw-actor": ACTOR_ID, "cf-connecting-ip": ACTOR_IP, ...extra }
 }
 
 interface Board {
@@ -172,20 +184,32 @@ describe.skipIf(!BASE)("local challenge API end to end", () => {
       await fetch(`${BASE}/v1/daily/runs`, { method: "POST", headers: headers(), body: JSON.stringify({ assisted: false }) })
     ).json()) as Descriptor
     const secondRun = recordRun(second)
-    const secondFirst = await fetch(`${BASE}${second.submission.path}`, {
-      method: "POST",
-      headers: headers({ "idempotency-key": `e2e-${second.runId}` }),
-      body: JSON.stringify({
+    const secondPayload = (claimedScore: number) =>
+      JSON.stringify({
         rulesetVersion: second.challenge.rulesetVersion,
         nonce: second.nonce,
         token: second.submission.token,
         assisted: second.assisted,
-        claimedScore: secondRun.score,
+        claimedScore,
         trace: { format: "gwt1", data: secondRun.trace },
-      }),
-    })
-    expect(secondFirst.status).toBe(201)
-    const secondBody2 = (await secondFirst.json()) as SubmissionResult
+      })
+    const postSecond = (payload: string, key: string) =>
+      fetch(`${BASE}${second.submission.path}`, {
+        method: "POST",
+        headers: headers({ "idempotency-key": key }),
+        body: payload,
+      })
+
+    // A rejected claim makes the Worker replay once and cache that replay; the honest retry of the
+    // identical trace must then reuse it and say so, without reporting a 0 ms replay.
+    const rejected = await postSecond(secondPayload(secondRun.score + 5000), `e2e-${second.runId}-rejected`)
+    expect(rejected.status).toBe(422)
+    const honest = await postSecond(secondPayload(secondRun.score), `e2e-${second.runId}-honest`)
+    expect(honest.status).toBe(201)
+    expect(honest.headers.get("server-timing")).toBe('replay;desc="cached"')
+    const secondBody2 = (await honest.json()) as SubmissionResult
+    expect(secondBody2).toMatchObject({ replayCached: true, replayMs: null, score: secondRun.score })
+
     const after = (await (await fetch(`${BASE}/v1/daily/leaderboard?date=${descriptor.challenge.date}&limit=50`)).json()) as Board
     expect(after.entries.length).toBe(before.entries.length)
     // Both runs replay the same seed, so they tie: the earlier submission keeps the row, and the

@@ -48,6 +48,14 @@ export interface HandlerOptions {
   now?: () => number
 }
 
+/** What a response may say about the replay behind its score. */
+interface ReplayReport {
+  /** True when this request reused a stored result instead of replaying the round. */
+  cached: boolean
+  /** The duration this request spent replaying, or null when it spent none. */
+  ms: number | null
+}
+
 export async function handle(request: Request, env: Env, options: HandlerOptions = {}): Promise<Response> {
   const started = performance.now()
   const requestId = crypto.randomUUID()
@@ -235,14 +243,18 @@ async function submitRun(
   const cached = await getReplayCache(env.DB, runId, traceHash, league.id, league.rulesetVersion)
   let outcome: ReplayOutcome
   let traceSteps: number
+  /** What this request may report about its own replay: a cache hit spent none of it. */
+  let replay: ReplayReport
   if (cached) {
     outcome = outcomeFromCache(cached)
     traceSteps = cached.trace_steps
+    replay = { cached: true, ms: null }
   } else {
     const trace = decodeSubmissionTrace(input)
     outcome = replayOrThrow(league, trace.steps)
     traceSteps = trace.steps.length
     await putReplayCache(env.DB, cacheRowFor(run, traceHash, league, outcome, traceSteps, now))
+    replay = { cached: false, ms: outcome.replayMs }
   }
 
   const tolerance = Math.max(1, Math.round(outcome.score * 0.002))
@@ -272,7 +284,7 @@ async function submitRun(
   // Read the standing after the row exists: the board keeps one row per actor, so this
   // submission's place is its position among the actors' bests, not its position in raw rows.
   const standing = ranked ? await rankOfSubmission(env.DB, submissionId) : null
-  const body = submissionBody(row, league, standing, cached !== null)
+  const body = submissionBody(row, league, standing, replay)
   const stored = await rememberIdempotency(env.DB, keyHash, requestHash, 201, JSON.stringify(body), actorId, now)
   if (stored) return storedResponse(stored)
   structuredLog("submission_verified", {
@@ -283,11 +295,16 @@ async function submitRun(
     score: outcome.score,
     claimed: input.claimedScore,
     steps: traceSteps,
-    replayMs: outcome.replayMs,
-    replayCached: cached !== null,
+    // The replay that produced the score, and whether this request paid for it.
+    replayMs: row.replay_ms,
+    replayCached: replay.cached,
     ranked,
   })
-  return json(body, 201, { ...rateHeaders(minute), "server-timing": `replay;dur=${outcome.replayMs}` })
+  return json(body, 201, {
+    ...rateHeaders(minute),
+    // A cache hit reports that it reused a result rather than claiming a rounded-down 0 ms replay.
+    "server-timing": replay.ms === null ? 'replay;desc="cached"' : `replay;dur=${replay.ms}`,
+  })
 }
 
 async function leaderboard(request: Request, env: Env, url: URL, now: number): Promise<Response> {
@@ -363,7 +380,9 @@ function outcomeFromCache(row: ReplayCacheRow): ReplayOutcome {
     ticks: Number(row.ticks),
     durationS: Number(row.duration_s),
     winnerId: row.winner_id,
-    replayMs: 0,
+    // The cost that produced this score, kept so the stored submission records a real provenance
+    // and never a 0 ms that would read as "replaying is free".
+    replayMs: Number(row.replay_ms),
   }
 }
 
@@ -423,7 +442,7 @@ function submissionBody(
   row: SubmissionRow,
   league: League,
   standing: SubmissionRank | null,
-  replayCached: boolean,
+  replay: ReplayReport,
 ): Record<string, unknown> {
   return {
     submissionId: row.id,
@@ -438,8 +457,10 @@ function submissionBody(
     score: row.score,
     claimedScore: row.claimed_score,
     traceSteps: row.trace_steps,
-    replayMs: row.replay_ms,
-    replayCached,
+    // Null, not 0, when this request reused a stored result: no replay ran, so there is no
+    // duration to report and none should be inferred.
+    replayMs: replay.ms,
+    replayCached: replay.cached,
     // The board keeps one row per actor: a run that is not this actor's best has no row and no
     // rank, and `personalBest: false` says why rather than leaving the client to guess.
     personalBest: standing === null ? false : standing.best,
@@ -464,7 +485,8 @@ async function replayExisting(
     })
   }
   const standing = existing.ranked === 1 ? await rankOfSubmission(db, existing.id) : null
-  const body = submissionBody(existing, league, standing, false)
+  // This request did not replay either: it found the run already submitted and reused that answer.
+  const body = submissionBody(existing, league, standing, { cached: true, ms: null })
   const stored = await rememberIdempotency(db, keyHash, requestHash, 200, JSON.stringify(body), actorId, now)
   if (stored) return storedResponse(stored)
   return json(body, 200, { "idempotent-replay": "true" })

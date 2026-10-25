@@ -1,6 +1,11 @@
-// Retention for the two tables that grow without bound: rate-limit windows that can no longer be
+// Retention for the two tables with a provable expiry: rate-limit windows that can no longer be
 // counted, and idempotency records that have expired. Both are dead weight once their window has
 // passed, and neither may be deleted in one unbounded statement: a scheduled event is bounded work.
+//
+// This is bounded, not exhaustive. `runs`, `submissions`, `replay_cache` and `leagues` also grow
+// with use and are not touched here — a run stops being useful within its 2 h lifetime, but a
+// submission and its league are the leaderboard's history, so their retention is a product
+// decision rather than a window arithmetic one. The README says the same.
 //
 // The bounds are deliberate. Each statement deletes at most `batchSize` rows, each event runs at
 // most `maxBatches` statements per table, and the loop also stops on a wall-clock budget. Whatever
@@ -35,7 +40,8 @@ export interface RetentionReport {
 
 /**
  * Delete what is provably dead, in bounded batches. Returns what it removed and whether work is
- * still queued, so the caller can log a truthful report instead of assuming it finished.
+ * still queued, so the caller can log a truthful report instead of assuming it finished. Only the
+ * two tables with an expiry window are swept; see the note at the top about the rest.
  */
 export async function runRetention(
   db: D1Database,

@@ -43,7 +43,7 @@ interface SubmissionResult {
   score: number
   claimedScore: number
   traceSteps: number
-  replayMs: number
+  replayMs: number | null
   replayCached: boolean
   personalBest: boolean
   submittedAt: string
@@ -170,6 +170,7 @@ describe("daily API", () => {
     expect(body.rank).toBe(1)
     expect(body.personalBest).toBe(true)
     expect(body.replayCached).toBe(false)
+    expect(body.replayMs).toBeGreaterThanOrEqual(0)
     expect(body.traceSteps).toBe(recorded.steps)
     expect(response.headers.get("server-timing")).toContain("replay;dur=")
 
@@ -249,17 +250,54 @@ describe("daily API", () => {
     expect(await rejected.json()).toMatchObject({ error: { code: "SCORE_MISMATCH" } })
 
     // The rejected attempt still paid for one replay; the honest retry of the identical trace
-    // reuses that result instead of replaying the round again.
+    // reuses that result instead of replaying the round again. A reused result reports no
+    // duration at all, rather than a 0 ms that would read as a free replay.
     const retry = await submit(env, descriptor, submissionBody(descriptor), "key-honest-0001")
     expect(retry.status).toBe(201)
-    expect(((await retry.json()) as SubmissionResult).replayCached).toBe(true)
+    const retryBody = (await retry.json()) as SubmissionResult
+    expect(retryBody.replayCached).toBe(true)
+    expect(retryBody.replayMs).toBeNull()
+    expect(retry.headers.get("server-timing")).toBe('replay;desc="cached"')
 
     const cache = await db
-      .prepare("SELECT run_id, trace_hash, score FROM replay_cache WHERE run_id = ?")
+      .prepare("SELECT run_id, trace_hash, score, replay_ms FROM replay_cache WHERE run_id = ?")
       .bind(descriptor.runId)
-      .first<{ run_id: string; trace_hash: string; score: number }>()
+      .first<{ run_id: string; trace_hash: string; score: number; replay_ms: number }>()
     expect(cache?.score).toBe(recorded.score)
     expect(cache?.trace_hash).toMatch(/^[a-f0-9]{64}$/)
+
+    // The stored submission keeps the cost that produced the score, so nothing in D1 records a
+    // cache hit as a 0 ms replay.
+    const stored = await db
+      .prepare("SELECT replay_ms FROM submissions WHERE run_id = ?")
+      .bind(descriptor.runId)
+      .first<{ replay_ms: number }>()
+    expect(stored?.replay_ms).toBe(Number(cache?.replay_ms))
+    expect(stored?.replay_ms).toBeGreaterThan(0)
+  })
+
+  it("keeps replayCached truthful across the first answer and its replays", async () => {
+    const { env } = testEnv()
+    const descriptor = await issue(env)
+    const body = submissionBody(descriptor)
+
+    const first = await submit(env, descriptor, body, "key-flags-first-01")
+    const firstBody = (await first.json()) as SubmissionResult
+    expect(firstBody).toMatchObject({ replayCached: false })
+    expect(firstBody.replayMs).toBeGreaterThanOrEqual(0)
+
+    // Same key, byte-identical body: the stored answer, unchanged, including its replay flags.
+    const sameKey = await submit(env, descriptor, body, "key-flags-first-01")
+    expect(sameKey.headers.get("idempotent-replay")).toBe("true")
+    expect((await sameKey.json()) as SubmissionResult).toMatchObject({
+      replayCached: false,
+      replayMs: firstBody.replayMs,
+    })
+
+    // A new key on an already-submitted run reused that answer: this request replayed nothing.
+    const newKey = await submit(env, descriptor, body, "key-flags-second-1")
+    expect(newKey.status).toBe(200)
+    expect((await newKey.json()) as SubmissionResult).toMatchObject({ replayCached: true, replayMs: null })
   })
 
   it("does not reuse a cached replay for a different trace", async () => {
@@ -667,6 +705,26 @@ describe("daily API", () => {
     expect(await writes()).toBe(0)
     expect((await call(env, "/v1/daily/leaderboard?date=2026-02-30", {}, FIXED_NOW)).status).toBe(422)
     expect(await writes()).toBe(0)
+  })
+
+  it("answers a leaderboard read with no client id and no preflight", async () => {
+    const { env } = testEnv()
+    // A read needs no identity, so a browser can make it as a simple request: no custom header, no
+    // OPTIONS round trip. Only the two POST routes require `x-gw-actor`.
+    const response = await call(
+      env,
+      "/v1/daily/leaderboard",
+      { headers: { origin: "http://localhost:3000" } },
+      FIXED_NOW,
+      IP_A,
+      "",
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:3000")
+
+    const post = await call(env, "/v1/daily/runs", jsonInit({}), FIXED_NOW, IP_A, "")
+    expect(post.status).toBe(400)
+    expect(await post.json()).toMatchObject({ error: { code: "ACTOR_ID_REQUIRED" } })
   })
 
   it("stops writing rate-limit rows once a read budget is spent", async () => {
