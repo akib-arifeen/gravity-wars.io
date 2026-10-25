@@ -30,8 +30,9 @@ Sources:
 | Story | Character progression system | done | Phase B: stars per level (goal, bonus, relic); Dash at 1 star, Repulse at 3, Singularity at 6. |
 | Story | Unlockable abilities and upgrades | done | Phase B: the campaign gates Dash, Repulse and the Singularity; Endless and Round keep everything unlocked. |
 | Story | Rich narrative with cosmic lore | done | Phase B: a two-sentence briefing per level and a line per sector. |
-| Levels | Multiple themed arenas | done | Classic, Binary, The Maw, Nebula Field and The Belt (Phase A). |
-| Levels | Dynamic environmental hazards | done | Orbiting stars and planets, a sweeping pulsar beam, solar flares, gravity storms, the closing wall (Phase A). |
+| Levels | Multiple themed arenas | done | Classic, Binary, The Maw, Nebula Field, The Belt (Phase A) and The Vast. |
+| Levels | Dynamic environmental hazards | done | Orbiting stars and planets, a sweeping pulsar beam, solar flares, gravity storms, the closing wall (Phase A), and The Vast's solar current. |
+| Levels | The Vast's solar current | done | A co-rotating magnetospheric band at one third of the arena: tangential push, thinner drag, and a per-life sail that raises the speed cap. Deliberately simplified game physics, not frame dragging or MHD. |
 | Levels | Special gravity zones | done | Nebula drag clouds, repulsor fields and quantum anomalies (Phase A). |
 | Levels | Hidden collectibles | done | Phase B: one hidden relic per campaign level, tracked on screen and off screen; collecting all twelve unlocks the Voidtouched skin. |
 | Levels | Progressive difficulty scaling | partial | Three difficulties; in-round escalation; Endless skill drifts with your mass (Phase A). Across levels comes with the campaign (Phase B). |

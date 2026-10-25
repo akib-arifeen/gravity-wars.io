@@ -162,8 +162,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const energyPct = hud ? Math.min(100, Math.max(0, (hud.energy / hud.energyMax) * 100)) : 0
   const energyLow = hud ? hud.energy < CONFIG.energy.lowThreshold : false
   const timeCritical = hud ? hud.phase === "playing" && hud.timeLeft <= 10 : false
-  // The surge ceiling, if any: a narrow phone drops this before it drops the number itself.
-  const speedCap = hud ? speedCapText(hud.assist.surge, hud.assist.surgeMul) : ""
+  // The surge and solar-current ceilings, if any: a narrow phone drops this before the number.
+  const speedCap = hud ? speedCapText(hud.assist.surge, hud.assist.surgeMul, hud.sail) : ""
 
   const status: string[] = []
   if (hud?.pulling) status.push("PULLING")
@@ -330,7 +330,7 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
               <div className="gw-hud-speed">
                 {/* The whole line for assistive tech; the parts below are what a narrow phone can
                     trim. Not a live region, so the visible split never announces twice. */}
-                <span className="gw-sr-only">{speedLine(hud.speed, hud.assist.surge, hud.assist.surgeMul)}</span>
+                <span className="gw-sr-only">{speedLine(hud.speed, hud.assist.surge, hud.assist.surgeMul, hud.sail)}</span>
                 <span aria-hidden="true" className="gw-speed-prefix">
                   SPEED{" "}
                 </span>

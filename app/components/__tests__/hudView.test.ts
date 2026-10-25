@@ -169,6 +169,21 @@ describe("live speed readout", () => {
     expect(`SPEED ${speedValue(342.4)}${speedCapText(2.1, 1.24)}`).toBe(speedLine(342.4, 2.1, 1.24))
   })
 
+  it("adds the solar-current sail's own ceiling only while it is meaningful", () => {
+    expect(speedCapText(0, 1, 0)).toBe("")
+    expect(speedCapText(0, 1, 1)).toBe(" · current ×1.18")
+    expect(speedCapText(0, 1, 0.5)).toBe(" · current ×1.09")
+    // Too small to round to a real multiplier: no suffix rather than "×1.00".
+    expect(speedCapText(0, 1, 0.02)).toBe("")
+    // Both ceilings are named, in the order the player earned them.
+    expect(speedCapText(2.1, 1.24, 1)).toBe(" · ×1.24 cap · current ×1.18")
+    expect(speedCapText(0, 1, 2)).toBe(" · current ×1.18")
+    expect(speedCapText(0, 1, -1)).toBe("")
+    // The whole line is still exactly the parts, including the sail.
+    expect(`SPEED ${speedValue(342.4)}${speedCapText(2.1, 1.24, 1)}`).toBe(speedLine(342.4, 2.1, 1.24, 1))
+    expect(speedLine(342.4, 0, 1, 1)).toBe("SPEED 342 u/s · current ×1.18")
+  })
+
   it("never implies the reading is well-relative or a measured ratio", () => {
     const line = speedLine(342.4, 2.1, 1.24)
     expect(line).not.toMatch(/prograde|relative|orbit|×1\.24x|faster/i)

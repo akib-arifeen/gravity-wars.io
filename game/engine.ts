@@ -24,6 +24,7 @@ import {
   type BurnReady,
 } from "./assist"
 import { rand, randRange, seedState } from "./rng"
+import { hasSolarCurrent, sailSpeedMul, sampleSolarCurrent, updateSolarSail, type SolarCurrentSample } from "./solarCurrent"
 import type {
   ArenaId,
   Body,
@@ -131,7 +132,7 @@ export interface CreateWorldOptions {
  *    around the ring, player first. The Vast uses CONFIG.vast.spawnGroup instead: `size` bodies in
  *    a row `gap` apart along the ring tangent, groups evenly spaced by anchor angle. Velocity 0,
  *    px/py = x/y, energy max, shield CONFIG.body.spawnShield, all timers/cooldowns/ult 0, power
- *    all 0, lastHitBy "",
+ *    all 0, sail 0, lastHitBy "",
  *    lastHitAt -1e9, assist = emptyAssist(), flags false, stats all 0 with peakMass = mass,
  *    alive true.
  * 3. Debris: CONFIG.debris.target dust/rock and CONFIG.crystal.target crystals placed per the
@@ -240,6 +241,7 @@ export function createWorld(opts: CreateWorldOptions): World {
       thrusting: false,
       pulling: false,
       charging: false,
+      sail: 0,
       dashCd: 0,
       repulseCd: 0,
       ult: 0,
@@ -356,13 +358,21 @@ export function createWorld(opts: CreateWorldOptions): World {
  *          along (body - well)/d;
  *        - repulsor zones containing the centre: zone.strength * (1 - d/zone.r) away from the
  *          zone centre (skip d == 0);
+ *        - The Vast's solar current (solarCurrent.ts): tangential acceleration strength * falloff
+ *          counter-clockwise about the arena centre, and drag multiplied by
+ *          1 + (bandDragMul - 1) * falloff, where falloff is a smooth 1..0 across the band at
+ *          arenaBase/3. Zero outside The Vast, and never applied to debris;
  *        - thrust: aT = thrustAccel(mass) * a when thrusting, else 0.
- *     f. Velocity: vNo = v + (gravity + wall + safety + beams + repulsors) * dt + dash impulse.
- *        vNew = vNo + aT*dt, where aT = thrustAccel(mass) * |a| * the surge's thrust multiplier.
- *        If |vNew| > maxSpeed(mass) * the surge's speed multiplier and |vNew| > |vNo|, rescale
- *        vNew to length max(that ceiling, |vNo|). (Surge multipliers are 1 with no surge.) Drag: v = vNew * exp(-drag * m * dt), m = product of
- *        the strengths of nebula zones containing the centre (1 if none). Clamp |v| to
- *        hardSpeedCap. Position += v*dt. stats.topSpeed = max(topSpeed, |v|).
+ *     f. Velocity: vNo = v + (gravity + wall + safety + beams + repulsors + current) * dt + dash
+ *        impulse. vNew = vNo + aT*dt, where aT = thrustAccel(mass) * |a| * the surge's thrust
+ *        multiplier. If |vNew| > maxSpeed(mass) * the surge's speed multiplier * the sail's speed
+ *        multiplier (1 + thrustMul*sail) and |vNew| > |vNo|, rescale vNew to length
+ *        max(that ceiling, |vNo|). (Surge and sail multipliers are 1 with no surge/charge.) Drag:
+ *        v = vNew * exp(-drag * m * dt), m = product of the strengths of nebula zones containing
+ *        the centre and the solar-current drag multiplier (1 if none). Clamp |v| to hardSpeedCap.
+ *        Position += v*dt. Then, in The Vast only, advance the sail from the new position and
+ *        velocity (build while moving with the current inside the band, decay outside).
+ *        stats.topSpeed = max(topSpeed, |v|).
  *  4. Pull: for each alive pulling body P, R = pullRadius(P), k = (P.ultActive > 0 ?
  *     ult.pullAccelMul : 1): debris with d < R gets v += debrisAccel*k*(1 - d/R)*dt toward P
  *     (skip d == 0); each other alive body B with canAbsorb(P, B) and d < R gets
@@ -565,6 +575,8 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
   const ab = CONFIG.abilities
   const dragFactor = Math.exp(-bc.drag * dt)
   const hasZones = zones.length > 0
+  const solarCurrent = hasSolarCurrent(world)
+  const solarSample: SolarCurrentSample = { falloff: 0, ax: 0, ay: 0, dragMul: 1 }
   repulsers.length = 0
 
   // 3.
@@ -772,6 +784,15 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
         }
       }
     }
+    // The Vast's solar current: tangential push and reduced drag, living bodies only.
+    if (solarCurrent) {
+      sampleSolarCurrent(world, b.x, b.y, solarSample)
+      if (solarSample.falloff > 0) {
+        accX += solarSample.ax
+        accY += solarSample.ay
+        dragMul *= solarSample.dragMul
+      }
+    }
     let aTx = 0
     let aTy = 0
     if (thrusting) {
@@ -786,7 +807,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     let vx = vNoX + aTx * dt
     let vy = vNoY + aTy * dt
     const sNew = Math.sqrt(vx * vx + vy * vy)
-    const ms = maxSpeed(b.mass) * surgeSpeedMul(b)
+    const ms = maxSpeed(b.mass) * surgeSpeedMul(b) * (solarCurrent ? sailSpeedMul(b.sail) : 1)
     if (sNew > ms) {
       const sNo = Math.sqrt(vNoX * vNoX + vNoY * vNoY)
       if (sNew > sNo) {
@@ -809,6 +830,7 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
     b.vy = vy
     b.x += vx * dt
     b.y += vy * dt
+    if (solarCurrent) updateSolarSail(world, b, dt)
     const sp = s2 > bc.hardSpeedCap ? bc.hardSpeedCap : s2
     if (sp > b.stats.topSpeed) b.stats.topSpeed = sp
   }
@@ -1348,8 +1370,8 @@ export function rankOf(world: World, id: string): number {
  * from assist.ts plus the surge timer/multiplier; escalating =
  * arenaRadius < arenaBase; arena = world.arena; mode = world.mode; endless = world.endless ?
  * {respawnIn, best, deaths, kills, lastKiller: name of lastKillerId's body or ""} : null;
- * leaderboard = leaderboard(world, 10); speed = the player's speed |v| in u/s; the rest mirrors
- * the player body.
+ * leaderboard = leaderboard(world, 10); speed = the player's speed |v| in u/s; sail = the player's
+ * solar-current charge; the rest mirrors the player body.
  */
 export function hudSnapshot(world: World): HudSnapshot {
   const p = world.bodies[0]
@@ -1371,6 +1393,7 @@ export function hudSnapshot(world: World): HudSnapshot {
     total: world.bodies.length,
     pulling: p.pulling,
     charging: p.charging,
+    sail: p.sail,
     lowEnergy: p.energy < CONFIG.energy.lowThreshold,
     shield: p.shield,
     dashCd: p.dashCd,
@@ -1651,6 +1674,7 @@ function leavePlay(b: Body, events: GameEvent[]): void {
   b.power.overdrive = 0
   b.power.magnet = 0
   b.power.phase = 0
+  b.sail = 0
   resetAssist(b.assist)
 }
 
@@ -1804,6 +1828,7 @@ function freshBody(world: World, id: string, name: string, color: string, skill:
     thrusting: false,
     pulling: false,
     charging: false,
+    sail: 0,
     dashCd: 0,
     repulseCd: 0,
     ult: 0,
@@ -1892,6 +1917,7 @@ function stepEndless(world: World, nEv: number): void {
       player.thrusting = false
       player.pulling = false
       player.charging = false
+      player.sail = 0
       player.dashCd = 0
       player.repulseCd = 0
       player.ult = 0

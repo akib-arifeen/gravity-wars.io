@@ -119,6 +119,42 @@ export const CONFIG = {
     dustLane: { orbit: 2450, radius: 640, drag: 2.4 },
     anomaly: { orbit: 1350, radius: 240 },
     repulsor: { orbit: 4240, radius: 330 },
+    /**
+     * The giant star's magnetospheric current: a wide band of co-rotating plasma at one third of
+     * arenaBase (1600 u in The Vast), over the same radius as the existing inner sector ring.
+     *
+     * Game physics, deliberately simplified: the band is a tangential acceleration with a smooth
+     * radial falloff and reduced drag, not frame dragging and not magnetohydrodynamics. It acts on
+     * living bodies only (debris keeps its own drag and path). Riding it with the flow builds a
+     * per-life sail charge that raises the body's speed ceiling; the charge bleeds away outside
+     * the band and resets on death.
+     *
+     * These are starting values for tuning against 30-seed bot rounds, not a claim about feel.
+     */
+    solarCurrent: {
+      /** Band centre as a fraction of arenaBase: 1/3 => 1600 u. */
+      bandRadiusFrac: 1 / 3,
+      /** Half-width (u) of the band; the force and drag blend reach zero at this offset. */
+      halfWidth: 170,
+      /** Tangential acceleration (u/s²) at the band centre. */
+      strength: 220,
+      /** Linear-drag multiplier at the band centre (below 1 = easier to keep speed). */
+      bandDragMul: 0.8,
+      /** Seconds from sail 0 to 1 while fully aligned with the current. */
+      buildSeconds: 4,
+      /** Seconds from sail 1 to 0 outside the band. */
+      decaySeconds: 20,
+      /** Speed-ceiling bonus at a full sail (0.18 => x1.18). */
+      thrustMul: 0.18,
+      /** Visual cycle (s) for the chevrons, streamers and surface drift. */
+      cyclePeriod: 40,
+      /** Visual depth (0..1) of the cached granulation and limb treatment. */
+      depth: 0.25,
+      /** Direction chevrons drawn around the annulus. */
+      chevrons: 16,
+      /** Streamers/prominences drawn from the star's limb. */
+      streamers: 2,
+    },
   },
 
   body: {

@@ -4,6 +4,7 @@
 // without a DOM. The shell's `layout` prop is the only desktop/phone input.
 
 import type { DeathCause, LeaderboardEntry } from "@/game/types"
+import { CONFIG } from "@/game/config"
 
 export type HudLayout = "desktop" | "touch"
 export type HudMode = "endless" | "round" | "campaign"
@@ -48,14 +49,23 @@ export function speedValue(speed: number): string {
   return `${Math.max(0, Math.round(speed))} u/s`
 }
 
-/** The surge ceiling as a suffix (" · ×1.24 cap"), or "" when no surge is running. */
-export function speedCapText(surge: number, surgeMul: number): string {
-  return surge > 0 && surgeMul > 1 ? ` · ×${surgeMul.toFixed(2)} cap` : ""
+/**
+ * The surge ceiling as a suffix (" · ×1.24 cap"), then the solar-current sail's own ceiling
+ * (" · current ×1.09") while it is riding The Vast's band. Both are speed ceilings, not measured
+ * ratios, so they are labelled as caps and the sail is named by its source. Returns "" when
+ * neither applies; the phone layout drops this whole span at its narrow breakpoint.
+ */
+export function speedCapText(surge: number, surgeMul: number, sail = 0): string {
+  let out = surge > 0 && surgeMul > 1 ? ` · ×${surgeMul.toFixed(2)} cap` : ""
+  const s = sail < 0 ? 0 : sail > 1 ? 1 : sail
+  const mul = 1 + CONFIG.vast.solarCurrent.thrustMul * s
+  if (mul >= 1.005) out += ` · current ×${mul.toFixed(2)}`
+  return out
 }
 
-/** The whole readout on one line: "SPEED 342 u/s · ×1.24 cap". */
-export function speedLine(speed: number, surge: number, surgeMul: number): string {
-  return `SPEED ${speedValue(speed)}${speedCapText(surge, surgeMul)}`
+/** The whole readout on one line: "SPEED 342 u/s · ×1.24 cap · current ×1.09". */
+export function speedLine(speed: number, surge: number, surgeMul: number, sail = 0): string {
+  return `SPEED ${speedValue(speed)}${speedCapText(surge, surgeMul, sail)}`
 }
 
 /** The quiet gap between two unready-Singularity answers (ms). */

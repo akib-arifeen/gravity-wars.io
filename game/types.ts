@@ -177,6 +177,12 @@ export interface Body {
   pulling: boolean
   /** True if the body was inside a star's charge band in the most recent step. */
   charging: boolean
+  /**
+   * The Vast's solar-current sail charge, 0..1. Built per life by moving with the current inside
+   * its band and bled away outside; it resets on death, respawn and fresh spawn. Raises the
+   * body's thrust speed ceiling by CONFIG.vast.solarCurrent.thrustMul * sail. Always 0 elsewhere.
+   */
+  sail: number
   /** Seconds until dash / repulse are ready again (0 = ready). */
   dashCd: number
   repulseCd: number
@@ -518,6 +524,8 @@ export interface HudSnapshot {
    * the remaining speed surge. Drives the dash-button glow and the canvas telegraph only.
    */
   assist: { wellId: string; stage: "none" | "in" | "out"; window: boolean; surge: number; surgeMul: number }
+  /** The Vast's solar-current sail charge 0..1 (0 everywhere else); raises the speed ceiling. */
+  sail: number
   /** The cosmic event the HUD should announce, with seconds left in its stage. */
   cosmic: { kind: CosmicKind; stage: "warning" | "active"; secondsLeft: number } | null
   /** True once the arena wall has started closing in. */
