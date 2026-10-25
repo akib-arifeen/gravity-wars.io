@@ -545,6 +545,7 @@ function spawnBody(
     thrusting: false,
     pulling: false,
     charging: false,
+    sail: 0,
     dashCd: 0,
     repulseCd: 0,
     ult: 0,

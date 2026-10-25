@@ -7,6 +7,8 @@ import { assistView, burnPromptVisible } from "./assist"
 import { CONFIG } from "./config"
 import { canAbsorb, pullRadius } from "./engine"
 import { cameraZoomScale, frameEdgeMarker, indicatorRange } from "./framing"
+import { nextRandom } from "./rng"
+import { hasSolarCurrent, solarCurrentRadius, solarCurrentVisual, type SolarCurrentVisual } from "./solarCurrent"
 import type { Body, CosmicKind, GameEvent, PowerUpKind, Vec, World } from "./types"
 
 export interface RenderView {
@@ -219,6 +221,12 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   const glowCache = new Map<string, HTMLCanvasElement>()
   const discCache = new Map<string, HTMLCanvasElement>()
   let ringSprite: HTMLCanvasElement | null = null
+  // The Vast's solar current: one cached annulus sprite (keyed by band radius), per-seed visual
+  // parameters and one cached star-surface texture. All are built on demand, never per frame.
+  let currentRing: { radius: number; canvas: HTMLCanvasElement } | null = null
+  let currentVisual: SolarCurrentVisual | null = null
+  let currentVisualSeed = -1
+  let starSurface: { key: string; canvas: HTMLCanvasElement } | null = null
 
   function glow(color: string): HTMLCanvasElement {
     let s = glowCache.get(color)
@@ -1107,6 +1115,170 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     g.stroke()
   }
 
+  /** Per-seed visual parameters, rebuilt only when the world seed changes. */
+  function solarVisual(world: World): SolarCurrentVisual {
+    if (currentVisualSeed !== world.seed || !currentVisual) {
+      currentVisualSeed = world.seed
+      currentVisual = solarCurrentVisual(world)
+    }
+    return currentVisual
+  }
+
+  /**
+   * Cached annulus sprite: a low-alpha, source-over band with soft inner and outer edges. It is
+   * built once per band radius (512 px, then scaled to the band) and never allocated per frame.
+   * The radius comes from the physics helper, so the drawn band sits exactly where the force does.
+   */
+  function getCurrentRing(R: number): HTMLCanvasElement {
+    if (currentRing && currentRing.radius === R) return currentRing.canvas
+    const S = 512
+    const c = makeCanvas(S, S)
+    const sg = c.getContext("2d")
+    if (sg) {
+      const hw = CONFIG.vast.solarCurrent.halfWidth
+      const inner = (R - hw) / (R + hw)
+      const mid = R / (R + hw)
+      const gd = sg.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2)
+      gd.addColorStop(0, "rgba(255,170,100,0)")
+      gd.addColorStop(Math.max(0, inner - 0.02), "rgba(255,150,80,0)")
+      gd.addColorStop(inner + 0.03, "rgba(255,160,90,0.08)")
+      gd.addColorStop(mid, "rgba(255,196,128,0.12)")
+      gd.addColorStop(1, "rgba(255,225,180,0)")
+      sg.fillStyle = gd
+      sg.fillRect(0, 0, S, S)
+    }
+    currentRing = { radius: R, canvas: c }
+    return c
+  }
+
+  /** Cached star-surface texture: seeded granulation plus a limb-darkened edge. */
+  function getStarSurface(world: World, r: number): HTMLCanvasElement {
+    const key = `${world.seed}|${Math.round(r)}`
+    if (starSurface && starSurface.key === key) return starSurface.canvas
+    const S = 512
+    const c = makeCanvas(S, S)
+    const sg = c.getContext("2d")
+    if (sg) {
+      const visual = solarVisual(world)
+      let st = visual.granulationSeed || 1
+      const rnd = (): number => {
+        const [v, s] = nextRandom(st)
+        st = s
+        return v
+      }
+      const cx = S / 2
+      const cy = S / 2
+      const rad = S / 2 - 2
+      const depth = CONFIG.vast.solarCurrent.depth
+      sg.save()
+      sg.beginPath()
+      sg.arc(cx, cy, rad, 0, TAU)
+      sg.clip()
+      // Granulation: many soft cells; warm bright tops and darker lanes.
+      const cells = 150
+      for (let i = 0; i < cells; i++) {
+        const a = rnd() * TAU
+        const d = Math.sqrt(rnd()) * rad * 0.97
+        const cr = rad * (0.025 + rnd() * 0.075)
+        const bright = rnd() < 0.42
+        const alpha = (0.03 + rnd() * 0.06) * depth * 4
+        const gr = sg.createRadialGradient(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 0, cx + Math.cos(a) * d, cy + Math.sin(a) * d, cr)
+        gr.addColorStop(0, bright ? `rgba(255,244,205,${alpha})` : `rgba(110,32,8,${alpha})`)
+        gr.addColorStop(1, "rgba(0,0,0,0)")
+        sg.fillStyle = gr
+        sg.beginPath()
+        sg.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d, cr, 0, TAU)
+        sg.fill()
+      }
+      // Limb: a dark, slightly warm rim so the huge disc reads as a sphere, not a flat circle.
+      const limb = sg.createRadialGradient(cx, cy, rad * 0.55, cx, cy, rad)
+      limb.addColorStop(0, "rgba(0,0,0,0)")
+      limb.addColorStop(0.8, "rgba(0,0,0,0)")
+      limb.addColorStop(0.96, `rgba(70,16,2,${0.2 * depth * 4})`)
+      limb.addColorStop(1, `rgba(35,8,0,${0.32 * depth * 4})`)
+      sg.fillStyle = limb
+      sg.fillRect(0, 0, S, S)
+      sg.restore()
+    }
+    starSurface = { key, canvas: c }
+    return c
+  }
+
+  /**
+   * The Vast's solar current, drawn in world space behind wells and bodies: a source-over
+   * annulus, 16 co-rotating direction chevrons and two streamers from the giant star's limb.
+   * Additive blending is deliberately not used. Reduced motion freezes rotation and sway.
+   */
+  function drawSolarCurrent(world: World) {
+    if (!hasSolarCurrent(world)) return
+    const R = solarCurrentRadius(world)
+    const hw = CONFIG.vast.solarCurrent.halfWidth
+    const outer = R + hw
+    if (!visible(0, 0, outer)) return
+    const S = CONFIG.vast.solarCurrent
+    const vis = solarVisual(world)
+    const spin = reduced ? 0 : (clock * TAU) / S.cyclePeriod / 4
+    g.save()
+    g.globalCompositeOperation = "source-over"
+    // Annulus.
+    g.globalAlpha = 1
+    g.drawImage(getCurrentRing(R), -outer, -outer, outer * 2, outer * 2)
+    // Two streamers/prominences, from the star's limb out across the band.
+    let starR = 0
+    for (let i = 0; i < world.wells.length; i++) {
+      const w = world.wells[i]
+      if (w.kind === "star" && w.radius > starR) starR = w.radius
+    }
+    if (starR > 0) {
+      for (let i = 0; i < S.streamers; i++) {
+        const sway = reduced ? 0 : Math.sin(clock * (TAU / S.cyclePeriod) + i * 2.1) * 0.1
+        const a0 = vis.streamerAngles[i] ?? (TAU * i) / Math.max(1, S.streamers)
+        const a1 = a0 + 0.55 + sway
+        const r0 = starR * 0.98
+        const r1 = R * 0.9
+        const m0 = (a0 + a1) / 2 - 0.18
+        const m1 = (a0 + a1) / 2 + 0.3
+        for (let k = 0; k < 3; k++) {
+          const wd = k === 0 ? 12 : k === 1 ? 4.5 : 1.4
+          const al = k === 0 ? 0.028 : k === 1 ? 0.05 : 0.085
+          g.strokeStyle = `rgba(255,214,150,${al})`
+          g.lineWidth = wd
+          g.beginPath()
+          g.moveTo(Math.cos(a0) * r0, Math.sin(a0) * r0)
+          g.bezierCurveTo(
+            Math.cos(m0) * (r0 + (r1 - r0) * 0.35),
+            Math.sin(m0) * (r0 + (r1 - r0) * 0.35),
+            Math.cos(m1) * (r0 + (r1 - r0) * 0.7),
+            Math.sin(m1) * (r0 + (r1 - r0) * 0.7),
+            Math.cos(a1) * r1,
+            Math.sin(a1) * r1,
+          )
+          g.stroke()
+        }
+      }
+    }
+    // 16 direction chevrons, tangent to the co-rotation. Below ~0.65 zoom (phones) they are
+    // clamped in screen space so they stay countable instead of shrinking to a few pixels.
+    g.fillStyle = "rgba(255,196,132,0.32)"
+    const size = Math.max(13, 8.5 / zoom)
+    for (let i = 0; i < S.chevrons; i++) {
+      const a = vis.chevronPhase + (i * TAU) / S.chevrons + spin
+      const ca = Math.cos(a)
+      const sa = Math.sin(a)
+      const x = ca * R
+      const y = sa * R
+      const nx = -sa
+      const ny = ca
+      g.beginPath()
+      g.moveTo(x + nx * size, y + ny * size)
+      g.lineTo(x - nx * size * 0.55 + ca * size * 0.7, y - ny * size * 0.55 + sa * size * 0.7)
+      g.lineTo(x - nx * size * 0.55 - ca * size * 0.7, y - ny * size * 0.55 - sa * size * 0.7)
+      g.closePath()
+      g.fill()
+    }
+    g.restore()
+  }
+
   /** Interpolated centre of a (possibly moving) well, into WX / WY. */
   function wellPos(w: { x: number; y: number; vx: number; vy: number }) {
     const back = CONFIG.dt * (1 - curAlpha)
@@ -1228,6 +1400,17 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
             g.arc(x, y, r * 0.9, 0, TAU)
             g.stroke()
             g.restore()
+            if (world.arena === "vast") {
+              // Cached seeded granulation and limb treatment: one texture per world seed, no
+              // per-frame allocation, source-over only.
+              const surf = getStarSurface(world, r)
+              g.save()
+              g.beginPath()
+              g.arc(x, y, r * 0.985, 0, TAU)
+              g.clip()
+              g.drawImage(surf, x - r, y - r, r * 2, r * 2)
+              g.restore()
+            }
           }
           if (hot) {
             g.strokeStyle = "rgba(255,150,100,0.85)"
@@ -2799,6 +2982,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     drawNebulae()
     drawZones(world)
     drawArena(world, player, ppx, ppy)
+    drawSolarCurrent(world)
     drawOrbits(world)
     drawWells(world, player)
     drawWormholes(world)
@@ -2818,6 +3002,10 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     discCache.clear()
     bodyDiscCache.clear()
     ringSprite = null
+    currentRing = null
+    currentVisual = null
+    currentVisualSeed = -1
+    starSurface = null
     vignetteCache.clear()
     fogSprites.length = 0
     planetSprites.length = 0

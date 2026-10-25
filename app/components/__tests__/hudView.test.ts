@@ -2,6 +2,7 @@
 // Pure, so it runs without a DOM or a browser.
 
 import { describe, expect, it } from "vitest"
+import { CONFIG } from "@/game/config"
 import type { LeaderboardEntry } from "@/game/types"
 import {
   BURN_TIP,
@@ -167,6 +168,26 @@ describe("live speed readout", () => {
     expect(speedCapText(2.1, 1)).toBe("")
     // The whole line is still exactly the parts, so the accessible copy cannot drift.
     expect(`SPEED ${speedValue(342.4)}${speedCapText(2.1, 1.24)}`).toBe(speedLine(342.4, 2.1, 1.24))
+  })
+
+  it("adds the solar-current sail's own ceiling only while it is meaningful", () => {
+    // Derived from the tuning, so changing thrustMul cannot leave these expectations stale.
+    const sailCap = (s: number): string =>
+      ` · current ×${(1 + CONFIG.vast.solarCurrent.thrustMul * s).toFixed(2)}`
+    expect(speedCapText(0, 1, 0)).toBe("")
+    expect(speedCapText(0, 1, 1)).toBe(sailCap(1))
+    expect(speedCapText(0, 1, 0.5)).toBe(sailCap(0.5))
+    // Too small to round to a real multiplier: no suffix rather than "×1.00".
+    expect(speedCapText(0, 1, 0.02)).toBe("")
+    // Both ceilings are named, in the order the player earned them.
+    expect(speedCapText(2.1, 1.24, 1)).toBe(` · ×1.24 cap${sailCap(1)}`)
+    expect(speedCapText(0, 1, 2)).toBe(sailCap(1))
+    expect(speedCapText(0, 1, -1)).toBe("")
+    // The whole line is still exactly the parts, including the sail.
+    expect(`SPEED ${speedValue(342.4)}${speedCapText(2.1, 1.24, 1)}`).toBe(speedLine(342.4, 2.1, 1.24, 1))
+    expect(speedLine(342.4, 0, 1, 1)).toBe(`SPEED 342 u/s${sailCap(1)}`)
+    // A decaying sail keeps naming its shrinking ceiling until it is too small to show.
+    expect(speedLine(342.4, 0, 1, 2 / 3)).toBe(`SPEED 342 u/s${sailCap(2 / 3)}`)
   })
 
   it("never implies the reading is well-relative or a measured ratio", () => {

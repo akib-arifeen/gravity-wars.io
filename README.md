@@ -34,7 +34,7 @@ Pick one on the menu, or choose Random:
 | The Maw | One enormous black hole, white dwarfs, and recharge stations |
 | Nebula Field | Drag clouds, a repulsor field, and a pulsar whose beams sweep the arena |
 | The Belt | A dense asteroid ring and planets on orbits |
-| The Vast | A red supergiant, a wide belt, outer remnants and the long dark beyond |
+| The Vast | A red supergiant with a riding solar current, a wide asteroid belt, and the long dark beyond |
 
 ## How to play
 
@@ -49,6 +49,7 @@ Pick one on the menu, or choose Random:
   - **Repulse** is a shockwave. Use it to knock a rival into a star.
   - **Singularity**: absorbing charges it. When you fire it, you become a black hole for 5 seconds.
 - **Slingshot.** Whip past a well fast enough and you earn energy and Singularity charge.
+- **Solar current (The Vast).** The giant star's wide band at one third of the arena pushes bodies along with it and thins the drag inside. Fly with the flow to fill a sail that raises your speed cap; it fades once you leave the band. It is a game simplification, not frame dragging or a magnetohydrodynamic simulation.
 - **Power-ups:**
   - Overdrive triples your energy regen.
   - Magnet doubles your pull radius.

@@ -23,7 +23,7 @@ export const ARENAS: Readonly<Record<ArenaId, ArenaInfo>> = {
   maw: { id: "maw", name: "The Maw", blurb: "One enormous black hole. Feed it, or feed on it." },
   nebula: { id: "nebula", name: "Nebula Field", blurb: "Thick drag clouds and a sweeping pulsar." },
   belt: { id: "belt", name: "The Belt", blurb: "A dense asteroid ring with orbiting planets." },
-  vast: { id: "vast", name: "The Vast", blurb: "A red supergiant, a wide asteroid belt, and the long dark beyond." },
+  vast: { id: "vast", name: "The Vast", blurb: "A red supergiant with a riding solar current, a wide asteroid belt, and the long dark beyond." },
 }
 
 /** Where debris spawns: uniform over the disc, or concentrated in an annulus. */
@@ -71,7 +71,8 @@ export interface DebrisField {
  *   radius 640, drag CONFIG.vast.dustLane.drag), one quantum anomaly opposite it (r 1350, radius
  *   240), and two repulsor fields at r 4240 perpendicular to the white dwarfs' axis (radius 330,
  *   strength CONFIG.zones.repulsorAccel). arenaBase 4800, spawn ring 3300. Field: ringShare 0.7,
- *   ring 1200..3200.
+ *   ring 1200..3200. The giant star also carries the solar current (a separate, non-layout band
+ *   at arenaBase/3; see solarCurrent.ts) that acts on bodies during play but places nothing.
  * Ids: kind + "-" + 1-based index per kind, except black holes use "hole" ("star-1", "hole-1",
  * "planet-2", "station-1"...);
  * zone ids "zone-1", ...

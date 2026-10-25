@@ -297,6 +297,8 @@ export function GameView(props: GameViewProps) {
     let feed: FeedItem[] = []
     let feedNextId = 1
     let lastBossKey = ""
+    // One solar-current toast per round, at the first meaningful ride (not on entering the band).
+    let solarToastShown = false
 
     // A function (not an inline comparison) so TypeScript does not narrow world.phase across step().
     const isOver = () => world.phase === "over"
@@ -545,6 +547,14 @@ export function GameView(props: GameViewProps) {
           }
           step(world, intents)
           renderer.onEvents(world, world.events)
+          if (!solarToastShown && world.arena === "vast" && player.alive && player.sail >= 0.5) {
+            solarToastShown = true
+            notify({
+              kicker: "Solar current",
+              name: "Riding the current",
+              description: "Your speed cap rises while you hold the arc. It fades outside.",
+            })
+          }
           const prof = propsRef.current.profile
           if (!demo && prof) {
             const got = trackStep(prof, tracker, world, world.events, Date.now())
