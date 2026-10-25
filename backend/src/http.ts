@@ -57,6 +57,46 @@ export function errorResponse(error: HttpError, requestId: string): Response {
 }
 
 /**
+ * Loopback hosts only. The static game is served from its own port during local development
+ * (`next dev`, or `serve out`), so the Worker has to allow the local origins it is played from.
+ * A deployed game origin is a separate decision and is deliberately not allowed here; every other
+ * origin gets no CORS headers at all, so a normal deployment behaves exactly as before.
+ */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"])
+
+function loopbackOrigin(origin: string | null): string | null {
+  if (!origin) return null
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null
+  if (url.username || url.password) return null
+  if (!LOOPBACK_HOSTS.has(url.hostname.replace(/^\[|\]$/g, ""))) return null
+  return url.origin
+}
+
+export function isLoopbackOrigin(origin: string | null): boolean {
+  return loopbackOrigin(origin) !== null
+}
+
+/** CORS headers for a loopback page, or none. Applied to every API response. */
+export function corsHeaders(origin: string | null): Record<string, string> {
+  const allowed = loopbackOrigin(origin)
+  if (!allowed) return {}
+  return {
+    "access-control-allow-origin": allowed,
+    "access-control-allow-methods": "GET, POST, OPTIONS",
+    "access-control-allow-headers": "content-type, idempotency-key",
+    "access-control-expose-headers": "idempotent-replay, x-request-id, server-timing, retry-after",
+    "access-control-max-age": "600",
+    vary: "origin",
+  }
+}
+
+/**
  * Read at most `maxBytes` of a JSON body. Content-Length is only a hint; the stream itself is
  * bounded so a chunked request cannot force the Worker to buffer an unbounded payload.
  */

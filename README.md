@@ -21,6 +21,7 @@ Play it: https://gravity-warsio.vercel.app
   - Sectors end in a boss: the **Leviathan** (splits into fragments), the **Twin Pulsars** (two sweeping beams) and the **Void King** (a timed collapse you have to outrun).
   - A boss can be eaten once you out-grow it, or worn down first by landing Repulses on it.
 - **Daily challenge** is one seeded round per UTC day: same arena, same rival roster, same cosmic events for everyone. Your score is the peak mass of the round; the best per day and a day streak are kept locally.
+  - A local-only experiment can have that run replay-verified by the Worker in `backend/`. It is off unless the page is built with `NEXT_PUBLIC_GW_CHALLENGE_API` pointing at a loopback API, and it adds no UI otherwise. It is not a global leaderboard: the board is one local database, and replay proves the score followed from the inputs, not that a person produced them. See [backend/README.md](backend/README.md).
 - **Share** any finished run from the end screen (Web Share sheet, or the text is copied to the clipboard). Text only, no backend, no analytics.
 
 ## Arenas
@@ -109,6 +110,7 @@ There is also a QA hook for tests and probes: `window.__gw` gives world access, 
   - `cosmic.ts` runs the cosmic events.
   - `achievements.ts` holds the achievements and local stats. It's pure and unit-tested.
 - `app/` is the React shell: the menu with an attract-mode round behind it, the HUD, pause and end screens, and the fixed-timestep loop.
+  - `app/challenge/` is the experimental verified-run client: descriptor fetch, per-step trace recording, submission state and retry. It is only reached when a build sets `NEXT_PUBLIC_GW_CHALLENGE_API` to a loopback API base.
 - The simulation is deterministic on a given JavaScript engine. A seed plus a sequence of inputs replays exactly the same round. Different browsers can differ in the last bit of `Math.exp` and `Math.pow`, so the same inputs can drift apart across engines.
 - Every body, player or bot, is driven only through an `Intent` (thrust vector, pull, and ability presses). That is the seam for multiplayer: a networked version would feed remote players' intents into the same `step()` call. Because of the cross-engine drift, it should run that step on a server (or sync state between clients) rather than rely on lockstep across browsers. The Endless leaderboard and the join, leave and respawn events are plain data, so a server can feed the same shapes.
 

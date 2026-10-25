@@ -13,6 +13,9 @@ const nextConfig = {
   // debug hook in app/components/GameView.tsx entirely. Set NEXT_PUBLIC_GW_DEBUG=1 to keep it.
   env: {
     NEXT_PUBLIC_GW_DEBUG: process.env.NEXT_PUBLIC_GW_DEBUG ?? "",
+    // Empty in every normal build. A loopback API base here turns on the local verified-run
+    // experiment; without it the page is byte-for-byte the game it was.
+    NEXT_PUBLIC_GW_CHALLENGE_API: process.env.NEXT_PUBLIC_GW_CHALLENGE_API ?? "",
   },
   trailingSlash: true,
   eslint: {

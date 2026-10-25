@@ -29,6 +29,8 @@ import { feedLines, mergeFeed, type FeedItem, type FeedView } from "@/game/feed"
 import { createInput, type InputController } from "@/game/input"
 import { createRenderer, type RenderFrame, type RenderView } from "@/game/render"
 import type { Sfx } from "@/game/audio"
+import { recordPlayerIntent } from "@/app/challenge/trace"
+import type { StepTrace } from "@/app/challenge/run"
 import { deathLine } from "./Screens"
 import { firstDeathTip, ultHintDue, ultHintNotice } from "./hudView"
 import { roundCriticalMass } from "@/app/roundSetup"
@@ -108,6 +110,8 @@ export interface GameViewProps {
   onBoss?(b: BossHud | null): void
   /** In-round announcements (boss splits, boss down, relic recovered). */
   onNotice?(n: Notice): void
+  /** Verified run: receives one entry per fixed step, with the exact player intent step() sees. */
+  trace?: StepTrace | null
 }
 
 function deathText(world: World, cause: DeathCause): string {
@@ -544,6 +548,12 @@ export function GameView(props: GameViewProps) {
               brains.set(b.id, brain)
             }
             intents.set(b.id, botIntent(world, brain))
+          }
+          // Verified run: record the step the engine is about to take, exactly as it sees it.
+          const trace = propsRef.current.trace
+          if (trace) {
+            recordPlayerIntent(trace, intents)
+            if (debug && debug.autopilot) trace.markAssisted()
           }
           step(world, intents)
           renderer.onEvents(world, world.events)

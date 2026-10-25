@@ -13,6 +13,9 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
+    // The verified-run integration test replays through the Worker's own replay module, which
+    // imports the shared simulation with explicit .ts extensions (backend/tsconfig does the same).
+    "allowImportingTsExtensions": true,
     "plugins": [
       {
         "name": "next"
