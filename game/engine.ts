@@ -1010,9 +1010,10 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
           break
         }
       } else if (d < w.radius + b.radius) {
-        // Touching a solid well ends any flyby before step 7b can grade it: the bounce below
-        // reverses the radial velocity, which would otherwise be recorded as a periapsis.
-        invalidatePassOnContact(b)
+        // Touching a solid well ends the flyby around that well before step 7b can grade it: the
+        // bounce below reverses the radial velocity, which would otherwise be recorded as a
+        // periapsis. A contact with any other well leaves the tracked pass alone.
+        invalidatePassOnContact(b, w.id)
         const nx = d === 0 ? 1 : dx / d
         const ny = d === 0 ? 0 : dy / d
         const reach = w.radius + b.radius

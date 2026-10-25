@@ -702,6 +702,77 @@ describe("assist: a solid surface is a collision, never a burn", () => {
     expect(r.well.orbit, "the well really is moving").not.toBeNull()
     expectNothingPaid(r, world!)
   })
+
+  it("a contact with another solid well leaves the advertised pass alone", () => {
+    const w = controlledWorld({ botCount: 0 })
+    const well = addWell(w, "planet", 1000, 0)
+    well.gm = 1e5
+    well.orbit = { cx: 0, cy: 0, r: 1000, w: 0.25, phase: -0.5 }
+    const b = w.bodies[0]
+    b.x = 1000
+    b.y = 100
+    b.px = b.x
+    b.py = b.y
+    b.vx = -100
+    b.vy = 0
+    // Fly to the first frame the HUD advertises, while the pass is still inbound: the dash taken
+    // on that frame is graded at the periapsis that follows.
+    let advertised = false
+    for (let i = 0; i < 400 && !advertised; i++) {
+      advertised = assistView(w, b).window && b.assist.pass.stage === "in"
+      if (!advertised) step(w, { player: NONE })
+    }
+    expect(advertised, "the pass around the tracked well is advertised").toBe(true)
+    const pass = b.assist.pass
+    expect(pass.wellId).toBe(well.id)
+
+    // The player takes the advertised burn.
+    step(w, { player: DASH })
+    const dashFrame = pass.dashAt
+    expect(dashFrame, "the dash is recorded on the pass").toBeGreaterThan(0)
+    expect(pass.wellId).toBe(well.id)
+
+    // A second solid well appears under the body: the next step is a real contact, but not with
+    // the well whose pass is being advertised.
+    const other = addWell(w, "planet", b.x, b.y)
+    const before = { x: b.x, y: b.y }
+    step(w, { player: NONE })
+    // The body is nearly co-moving with the tracked well, so this contact is a soft one and the
+    // engine emits no solidHit cue (that needs > 40 u/s into the surface). The engine's snap out to
+    // the surface only happens in the solid-contact branch, so it is the contact proof.
+    const reach = other.radius + b.radius
+    expect(Math.hypot(b.x - other.x, b.y - other.y), "the contact really happened").toBeCloseTo(reach, 6)
+    expect(Math.hypot(b.x - before.x, b.y - before.y), "the bounce moved the body").toBeGreaterThan(1)
+    // The contact was with a different well, so the promised pass survives: same well, same dash.
+    expect(pass.wellId, "the tracked well is unchanged").toBe(well.id)
+    expect(pass.stage).not.toBe("none")
+    expect(pass.dashAt, "the dash the window promised is still recorded").toBe(dashFrame)
+
+    // ...and the burn it promised still pays: the contact did not quietly cancel it.
+    let burns = eventsOf(w, "oberth").length
+    for (let i = 0; i < 80 && burns === 0; i++) {
+      step(w, { player: NONE })
+      burns += eventsOf(w, "oberth").length
+    }
+    expect(burns, "the advertised burn still pays exactly once").toBe(1)
+    expect(b.stats.oberths).toBe(1)
+    expect(b.assist.pass.paid).toBe(true)
+    expect(b.assist.surge).toBeGreaterThan(0)
+  })
+
+  it("a contact with the tracked well itself still ends that pass and pays nothing", () => {
+    let world: World | null = null
+    const r = collisionRun((w) => {
+      world = w
+      return headOn(w)
+    }, { dash: false })
+    expectNothingPaid(r, world!)
+    expect(r.b.assist.pass.wellId).toBe("")
+    expect(r.b.assist.pass.stage).toBe("none")
+    expect(r.b.assist.pass.periAt).toBe(-1)
+    expect(r.b.stats.oberths).toBe(0)
+    expect(r.b.assist.surge).toBe(0)
+  })
 })
 
 describe("assist: the prompt only advertises payable passes", () => {

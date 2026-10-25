@@ -7,6 +7,7 @@ import type { InputController } from "@/game/input"
 import type { HudSnapshot } from "@/game/types"
 import type { AbilityId } from "@/game/campaign"
 import { AbilityIcon, LockIcon } from "./Icons"
+import { dashName } from "./hudView"
 
 const KNOB_BASE = 56
 const DEADZONE = 0.12
@@ -302,14 +303,15 @@ export function TouchControls({ input, hud = null, onGesture, lockedAbilities = 
         </button>
         {abilities.map((a) => {
           const locked = isLocked(a.kind)
-          const burnCue = a.kind === "dash" && burnReady ? ", prograde burn window open" : ""
           return (
             <button
               key={a.kind}
               type="button"
               aria-disabled={locked || undefined}
               aria-label={
-                locked ? `${a.name} (locked: earn campaign stars to unlock)` : `${a.name}${burnCue}`
+                locked
+                  ? `${a.name} (locked: earn campaign stars to unlock)`
+                  : dashName(a.name, a.kind === "dash" && burnReady)
               }
               onClick={() => {
                 if (!locked) input.press(a.kind)

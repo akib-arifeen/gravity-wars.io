@@ -93,14 +93,18 @@ export function resetPass(a: AssistState): void {
 }
 
 /**
- * A solid surface contact ends the flyby. The bounce reverses the body's radial velocity in the
- * same step, and a pass that kept running would read that reversal as a periapsis and grade it —
- * a reward for crashing. The engine calls this on the contact step, before trackPass, so a
- * collision can neither create nor complete a payable periapsis. Only the pass is dropped: the
- * bounce physics, the payout cooldown, the same-well lock and any live surge are untouched, and a
- * later approach that clears the band on the way in can still open a genuine pass.
+ * A solid surface contact ends the flyby — but only the flyby around **that** well. The bounce
+ * reverses the body's radial velocity in the same step, and a pass that kept running would read
+ * that reversal as a periapsis and grade it: a reward for crashing. The engine calls this on the
+ * contact step, before trackPass, so a collision with the tracked well can neither create nor
+ * complete a payable periapsis. Touching a different well (another planet, a station) leaves an
+ * advertised pass alone: that contact is not this pass's periapsis, and cancelling it would take
+ * away a window the HUD promised. Only the pass is dropped: the bounce physics, the payout
+ * cooldown, the same-well lock and any live surge are untouched, and a later approach that clears
+ * the band on the way in can still open a genuine pass.
  */
-export function invalidatePassOnContact(body: Body): void {
+export function invalidatePassOnContact(body: Body, wellId: string): void {
+  if (body.assist.pass.wellId !== wellId) return
   resetPass(body.assist)
 }
 
