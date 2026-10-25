@@ -10,7 +10,7 @@ import { FEED_MAX, type FeedItem, type FeedView } from "@/game/feed"
 import type { AbilityId } from "@/game/campaign"
 import type { LeaderboardEntry } from "@/game/types"
 import { AbilityIcon, LockIcon, WallIcon } from "./Icons"
-import { centreHud, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, type HudMode } from "./hudView"
+import { centreHud, dashName, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, type HudMode } from "./hudView"
 
 /** Campaign context the HUD shows: the level badge and its goal. */
 export interface CampaignHud {
@@ -221,6 +221,13 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const bossActive = boss !== null && hud?.phase !== "over"
   // The visual bar changes ~4x/s; the status text below changes only when the fight's state does.
   const bossAnnounce = bossActive && boss ? bossAnnouncement(boss) : ""
+  // The accessible equivalent of the dash slot's burn highlight: a real flyby's window is open and
+  // the dash can pay it right now. It is announced through the dash control's NAME only — never
+  // through the live region below, which would announce late, twice, or over the boss line for a
+  // 0.35 s window that also has a visual and canvas cue.
+  const burnReady = hud
+    ? burnPromptVisible(hud.assist.window, hud.dashCd, hud.energy, lockedAbilities.includes("dash"))
+    : false
 
   return (
     <div className="gw-hud" data-mode={mode} inert={inert}>
@@ -314,7 +321,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
 
           {bossActive && boss && <BossBar boss={boss} />}
           {/* Persistent polite status region: only its text changing announces, and that text
-              ignores the 4 Hz mass/health updates. */}
+              ignores the 4 Hz mass/health updates. The burn window is deliberately not in here;
+              it is carried by the dash control's name instead. */}
           <p className="gw-sr-only" role="status" aria-live="polite">
             {bossAnnounce}
           </p>
@@ -342,16 +350,16 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                   key={sl.kind}
                   type="button"
                   className="gw-slot"
-                  aria-label={sl.locked ? `${sl.label} (locked: earn campaign stars to unlock)` : `${sl.label} (${sl.key})`}
+                  aria-label={
+                    sl.locked
+                      ? `${sl.label} (locked: earn campaign stars to unlock)`
+                      : dashName(`${sl.label} (${sl.key})`, sl.kind === "dash" && burnReady)
+                  }
                   disabled={sl.locked}
                   data-locked={sl.locked ? "1" : undefined}
                   data-low={sl.low ? "1" : undefined}
                   data-ready={sl.kind === "ult" && (ultReady || ultActive) ? "1" : undefined}
-                  data-burn={
-                    sl.kind === "dash" && burnPromptVisible(hud.assist.window, hud.dashCd, hud.energy, sl.locked)
-                      ? "1"
-                      : undefined
-                  }
+                  data-burn={sl.kind === "dash" && burnReady ? "1" : undefined}
                   style={{ ["--p" as string]: sl.pct }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPress(sl.kind)}

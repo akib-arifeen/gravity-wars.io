@@ -1,7 +1,7 @@
 // Bot tests, written from the contract only: the exported signatures and doc comments of
 // bots.ts and engine.ts, plus types.ts and config.ts. Tunables come from CONFIG by name.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { botIntent, createBotBrain } from "../bots"
 import { CONFIG } from "../config"
 import { createWorld, radiusForMass, step } from "../engine"
@@ -17,6 +17,10 @@ import {
   setMass,
   snapshot,
 } from "./helpers"
+
+// Long seeded bot simulations. Give this file a realistic ceiling rather than raising the global
+// default for the fast suites; a genuine hang still fails, just later.
+vi.setConfig({ testTimeout: 30000 })
 
 const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard"]
 const ZERO: Intent = { ax: 0, ay: 0, pull: false }

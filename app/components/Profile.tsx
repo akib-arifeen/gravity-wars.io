@@ -27,6 +27,7 @@ export function ProfilePanel({ profile, onClose }: { profile: Profile; onClose()
     ["Top speed", String(Math.round(st.topSpeed))],
     ["Absorbs", String(st.absorbs)],
     ["Slingshots", String(st.slingshots)],
+    ["Oberths", String(st.oberths)],
     ["Assists", String(st.assists)],
     ["Pickups", String(st.pickups)],
     ["Comets", String(st.comets)],

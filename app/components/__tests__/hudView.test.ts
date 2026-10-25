@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import type { LeaderboardEntry } from "@/game/types"
 import {
   centreHud,
+  dashName,
   dismissesLeaderboard,
   formatClock,
   leaderboardRows,
@@ -73,6 +74,18 @@ describe("dismissesLeaderboard", () => {
     expect(dismissesLeaderboard("Escape", true)).toBe(true)
     expect(dismissesLeaderboard("Escape", false)).toBe(false)
     expect(dismissesLeaderboard("Enter", true)).toBe(false)
+  })
+})
+
+describe("dashName", () => {
+  it("leaves the control's name alone when no burn is payable", () => {
+    expect(dashName("Dash (Shift)", false)).toBe("Dash (Shift)")
+  })
+
+  it("adds the burn cue while the window is open and takes it back exactly when it closes", () => {
+    const base = "Dash"
+    expect(dashName(base, true)).toBe("Dash, prograde burn window open")
+    expect(dashName(base, false)).toBe(base)
   })
 })
 

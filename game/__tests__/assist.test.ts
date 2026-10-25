@@ -512,6 +512,269 @@ describe("assist: a real flyby is required", () => {
   })
 })
 
+describe("assist: a solid surface is a collision, never a burn", () => {
+  // The bounce on a non-lethal well reverses the body's radial velocity in step 7, and step 7b
+  // used to read that reversal as periapsis: a dash pressed anywhere during the approach paid a
+  // graded burn the HUD never advertised, with the surface as the "periapsis". The engine now
+  // invalidates the pass on contact, so these runs must earn nothing while the bounce still works.
+
+  interface CollisionRun {
+    b: Body
+    well: Well
+    /** Step a dash was requested on (-1 if the run never had the option). */
+    dashTick: number
+    /** Real dash events for the player: a request at rest is silently dropped by the engine. */
+    dashes: number
+    contactTick: number
+    solidHits: number
+    windowFrames: number
+    /** True if the pass ever recorded a periapsis at all (the fake one included). */
+    periSeen: boolean
+    oberths: number
+    /** Legacy fast-pass perks earned: a separate contract the assist system must not disturb. */
+    slings: number
+    /** Burn events emitted at any point (the engine's own record, not just the counter). */
+    burnEvents: number
+    minDist: number
+    /** Energy change across the contact step: a burn would add its tier's energy here. */
+    energyJump: number
+    /** Radial velocity (body minus well, dot velocities) right after the contact step. */
+    radialAfterContact: number
+    energyStart: number
+  }
+
+  function collisionRun(
+    place: (w: World) => { well: Well; b: Body; steps: number },
+    opts: { dash?: boolean } = {},
+  ): CollisionRun {
+    const w = controlledWorld({ botCount: 0 })
+    const { well, b, steps } = place(w)
+    const energyStart = b.energy
+    let dashTick = -1
+    let contactTick = -1
+    let solidHits = 0
+    let windowFrames = 0
+    let periSeen = false
+    let minDist = Infinity
+    let energyBefore = b.energy
+    let energyJump = 0
+    let radialAfterContact = 0
+    // world.events resets every step, so per-step counts have to be accumulated as we go.
+    let dashes = 0
+    let slings = 0
+    let burnEvents = 0
+    for (let i = 0; i < steps; i++) {
+      minDist = Math.min(minDist, Math.hypot(b.x - well.x, b.y - well.y))
+      const view = assistView(w, b)
+      if (view.window) windowFrames++
+      const wantDash =
+        opts.dash !== false && dashTick < 0 && b.assist.pass.wellId !== "" && !view.window
+      if (wantDash) dashTick = i
+      energyBefore = b.energy
+      step(w, { player: wantDash ? DASH : NONE })
+      if (b.assist.pass.periAt >= 0) periSeen = true
+      dashes += eventsOf(w, "dash").filter((e) => e.bodyId === b.id).length
+      slings += eventsOf(w, "slingshot").filter((e) => e.bodyId === b.id).length
+      burnEvents += eventsOf(w, "oberth").length
+      const hits = eventsOf(w, "solidHit").filter((e) => e.bodyId === b.id).length
+      solidHits += hits
+      if (hits > 0 && contactTick < 0) {
+        contactTick = i
+        energyJump = b.energy - energyBefore
+        radialAfterContact =
+          (b.x - well.x) * (b.vx - well.vx) + (b.y - well.y) * (b.vy - well.vy)
+      }
+    }
+    return {
+      b,
+      well,
+      dashTick,
+      dashes,
+      contactTick,
+      solidHits,
+      windowFrames,
+      periSeen,
+      oberths: b.stats.oberths,
+      burnEvents,
+      slings,
+      minDist,
+      energyJump,
+      radialAfterContact,
+      energyStart,
+    }
+  }
+
+  /**
+   * Shared expectations: contact happened, the assist paid nothing, and the bounce still works.
+   * `legacySlingshot` pins the separate pre-existing fast-pass perk (a dash makes the body fast
+   * next to the well, and that perk never depended on the pass) to exactly its configured reward,
+   * which is far below every burn tier — proving no burn tier paid.
+   */
+  function expectNothingPaid(r: CollisionRun, w?: World, legacySlingshot = false): void {
+    if (r.dashTick >= 0) {
+      expect(r.dashes, "the exploit's dash really fired").toBe(1)
+      expect(r.dashTick).toBeLessThan(r.contactTick)
+    } else {
+      expect(r.dashes).toBe(0)
+    }
+    expect(r.solidHits, "the surface bounce still happens").toBeGreaterThanOrEqual(1)
+    expect(r.windowFrames, "no advertised window ever existed").toBe(0)
+    // The collision snaps the body to exactly radius + bodyRadius, so <= is the contact proof.
+    expect(r.minDist, "the body really reached the solid surface").toBeLessThanOrEqual(
+      r.well.radius + r.b.radius + 1e-6,
+    )
+    expect(r.periSeen, "a collision never records a periapsis").toBe(false)
+    expect(r.oberths).toBe(0)
+    expect(r.b.assist.pass.paid).toBe(false)
+    expect(r.b.assist.surge).toBe(0)
+    expect(r.b.assist.surgeMul).toBe(1)
+    expect(r.b.assist.thrustMul).toBe(1)
+    // A burn's energy grant would land on the contact step; only regen may move it.
+    expect(r.energyJump).toBeLessThanOrEqual(CONFIG.energy.regen * DT + 1e-6)
+    expect(r.b.energy, "no energy farmed").toBeLessThanOrEqual(r.energyStart)
+    if (legacySlingshot) {
+      expect(r.slings).toBeLessThanOrEqual(1)
+      expect(r.b.stats.slingshots).toBe(r.slings)
+      expect(r.b.ult, "only the legacy fast-pass charge, never a burn tier").toBeCloseTo(
+        r.slings * CONFIG.slingshot.ult,
+        12,
+      )
+    } else {
+      expect(r.slings, "not even the legacy fast-pass perk").toBe(0)
+      expect(r.b.ult, "no Singularity charge farmed").toBe(0)
+    }
+    expect(r.b.stats.oberths).toBe(0)
+    expect(r.burnEvents, "the engine emitted no burn at all").toBe(0)
+    expect(r.b.alive, "a planet is not lethal").toBe(true)
+    // The bounce: on the contact step the body is outside the surface and receding from the well.
+    expect(r.radialAfterContact, "the solid bounce still reverses the radial velocity").toBeGreaterThan(0)
+    if (w) expect(w.bodies.every((other) => other.assist.pass.paid === false)).toBe(true)
+  }
+
+  /** Head-on at the origin: 100 u of clear space, straight into the surface. */
+  function headOn(w: World): { well: Well; b: Body; steps: number } {
+    const well = addWell(w, "planet", 0, 0)
+    const b = w.bodies[0]
+    b.x = 0
+    b.y = -(well.radius + b.radius + 100)
+    b.px = b.x
+    b.py = b.y
+    b.vx = 0
+    b.vy = 300
+    return { well, b, steps: 80 }
+  }
+
+  it("a head-on plunge into a solid planet pays nothing", () => {
+    let world: World | null = null
+    const r = collisionRun((w) => {
+      world = w
+      return headOn(w)
+    }, { dash: false })
+    expectNothingPaid(r, world!)
+  })
+
+  it("a dash pressed on the approach still pays no burn, only the legacy fast pass", () => {
+    let world: World | null = null
+    const r = collisionRun((w) => {
+      world = w
+      return headOn(w)
+    })
+    expectNothingPaid(r, world!, true)
+  })
+
+  it("a moving well sweeping through a drifting body pays nothing on the bounce", () => {
+    let world: World | null = null
+    const r = collisionRun((w) => {
+      world = w
+      const well = addWell(w, "planet", 1000, 0)
+      // The well does the moving; the body only drifts, exactly the old "carried through" setup.
+      well.gm = 1e5
+      well.orbit = { cx: 0, cy: 0, r: 1000, w: 0.25, phase: -0.5 }
+      const b = w.bodies[0]
+      b.x = 1000
+      b.y = 100
+      b.px = b.x
+      b.py = b.y
+      b.vx = 0
+      b.vy = 0
+      return { well, b, steps: 400 }
+    }, { dash: false })
+    expect(r.well.orbit, "the well really is moving").not.toBeNull()
+    expectNothingPaid(r, world!)
+  })
+
+  it("a contact with another solid well leaves the advertised pass alone", () => {
+    const w = controlledWorld({ botCount: 0 })
+    const well = addWell(w, "planet", 1000, 0)
+    well.gm = 1e5
+    well.orbit = { cx: 0, cy: 0, r: 1000, w: 0.25, phase: -0.5 }
+    const b = w.bodies[0]
+    b.x = 1000
+    b.y = 100
+    b.px = b.x
+    b.py = b.y
+    b.vx = -100
+    b.vy = 0
+    // Fly to the first frame the HUD advertises, while the pass is still inbound: the dash taken
+    // on that frame is graded at the periapsis that follows.
+    let advertised = false
+    for (let i = 0; i < 400 && !advertised; i++) {
+      advertised = assistView(w, b).window && b.assist.pass.stage === "in"
+      if (!advertised) step(w, { player: NONE })
+    }
+    expect(advertised, "the pass around the tracked well is advertised").toBe(true)
+    const pass = b.assist.pass
+    expect(pass.wellId).toBe(well.id)
+
+    // The player takes the advertised burn.
+    step(w, { player: DASH })
+    const dashFrame = pass.dashAt
+    expect(dashFrame, "the dash is recorded on the pass").toBeGreaterThan(0)
+    expect(pass.wellId).toBe(well.id)
+
+    // A second solid well appears under the body: the next step is a real contact, but not with
+    // the well whose pass is being advertised.
+    const other = addWell(w, "planet", b.x, b.y)
+    const before = { x: b.x, y: b.y }
+    step(w, { player: NONE })
+    // The body is nearly co-moving with the tracked well, so this contact is a soft one and the
+    // engine emits no solidHit cue (that needs > 40 u/s into the surface). The engine's snap out to
+    // the surface only happens in the solid-contact branch, so it is the contact proof.
+    const reach = other.radius + b.radius
+    expect(Math.hypot(b.x - other.x, b.y - other.y), "the contact really happened").toBeCloseTo(reach, 6)
+    expect(Math.hypot(b.x - before.x, b.y - before.y), "the bounce moved the body").toBeGreaterThan(1)
+    // The contact was with a different well, so the promised pass survives: same well, same dash.
+    expect(pass.wellId, "the tracked well is unchanged").toBe(well.id)
+    expect(pass.stage).not.toBe("none")
+    expect(pass.dashAt, "the dash the window promised is still recorded").toBe(dashFrame)
+
+    // ...and the burn it promised still pays: the contact did not quietly cancel it.
+    let burns = eventsOf(w, "oberth").length
+    for (let i = 0; i < 80 && burns === 0; i++) {
+      step(w, { player: NONE })
+      burns += eventsOf(w, "oberth").length
+    }
+    expect(burns, "the advertised burn still pays exactly once").toBe(1)
+    expect(b.stats.oberths).toBe(1)
+    expect(b.assist.pass.paid).toBe(true)
+    expect(b.assist.surge).toBeGreaterThan(0)
+  })
+
+  it("a contact with the tracked well itself still ends that pass and pays nothing", () => {
+    let world: World | null = null
+    const r = collisionRun((w) => {
+      world = w
+      return headOn(w)
+    }, { dash: false })
+    expectNothingPaid(r, world!)
+    expect(r.b.assist.pass.wellId).toBe("")
+    expect(r.b.assist.pass.stage).toBe("none")
+    expect(r.b.assist.pass.periAt).toBe(-1)
+    expect(r.b.stats.oberths).toBe(0)
+    expect(r.b.assist.surge).toBe(0)
+  })
+})
+
 describe("assist: the prompt only advertises payable passes", () => {
   const periBand = (w: Well): number => w.radius * CONFIG.assist.periBand
 
@@ -565,11 +828,16 @@ describe("assist: the prompt only advertises payable passes", () => {
     const { w, well, b } = flybyWorld({ offset: 0 })
     expect(impactParameter(b, well)).toBeLessThan(well.radius + b.radius)
     let windowFrames = 0
+    let burns = 0
     for (let i = 0; i < 240 && b.alive; i++) {
       if (assistView(w, b).window) windowFrames++
       step(w, { player: pilot(b) })
+      burns += eventsOf(w, "oberth").length
     }
     expect(windowFrames).toBe(0)
+    expect(burns).toBe(0)
+    expect(b.stats.oberths).toBe(0)
+    expect(b.assist.surge).toBe(0)
     expect(b.alive).toBe(false)
   })
 
@@ -847,11 +1115,11 @@ describe("assist: caps and recovery", () => {
 })
 
 describe("assist: moving wells and bots", () => {
-  it("a stationary body is carried through a real moving-well flyby", () => {
-    const setup = (): { w: World; b: Body } => {
+  it("a moving well pays a burn on a genuine pass, with no contact", () => {
+    const setup = (): { w: World; well: Well; b: Body } => {
       const w = controlledWorld({ botCount: 0 })
       const well = addWell(w, "planet", 1000, 0)
-      // The well itself does the moving; the body only drifts.
+      // The well itself does the moving; the body drifts across its path, clear of the surface.
       well.gm = 1e5
       well.orbit = { cx: 0, cy: 0, r: 1000, w: 0.25, phase: -0.5 }
       const b = w.bodies[0]
@@ -859,29 +1127,46 @@ describe("assist: moving wells and bots", () => {
       b.y = 100
       b.px = b.x
       b.py = b.y
-      b.vx = 0
+      b.vx = -100
       b.vy = 0
-      return { w, b }
+      return { w, well, b }
     }
+    // The advertised frame is the signal a player actually gets, so the dash rides on it.
     const probe = setup()
-    let peri = -1
-    for (let i = 0; i < 900 && peri < 0; i++) {
-      step(probe.w, {})
-      if (probe.b.assist.pass.stage === "out") peri = i
+    let dashTick = -1
+    for (let i = 0; i < 400; i++) {
+      if (assistView(probe.w, probe.b).window) {
+        dashTick = i
+        break
+      }
+      step(probe.w, { player: NONE })
     }
-    expect(peri, "a still body can be caught by a moving well").toBeGreaterThan(0)
+    expect(dashTick, "the HUD advertised a payable window").toBeGreaterThan(0)
 
-    const { w, b } = setup()
+    const { w, well, b } = setup()
     const burns: OberthEvent[] = []
+    let solidHits = 0
+    let slingshots = 0
+    let minDist = Infinity
+    let windowAtDash = false
     // Stop shortly after the burn: the surge is a short window, not a permanent state.
-    for (let i = 0; i < peri + 40; i++) {
-      step(w, { player: i === peri ? DASH : NONE })
+    for (let i = 0; i < dashTick + 40; i++) {
+      minDist = Math.min(minDist, Math.hypot(b.x - well.x, b.y - well.y))
+      if (i === dashTick) windowAtDash = assistView(w, b).window
+      step(w, { player: i === dashTick ? DASH : NONE })
       for (const e of eventsOf(w, "oberth")) burns.push(e)
+      solidHits += eventsOf(w, "solidHit").filter((e) => e.bodyId === b.id).length
+      slingshots += eventsOf(w, "slingshot").filter((e) => e.bodyId === b.id).length
     }
+    expect(windowAtDash, "the dash lands on an advertised, eligible window").toBe(true)
+    expect(solidHits, "a genuine pass never touches the surface").toBe(0)
+    expect(minDist, "clear of the solid surface").toBeGreaterThan(well.radius + b.radius)
     expect(burns).toHaveLength(1)
     expect(burns[0].moving).toBe(true)
     expect(burns[0].speed).toBeGreaterThan(CONFIG.assist.minRelSpeed)
     expect(b.assist.surge).toBeGreaterThan(0)
+    expect(b.stats.oberths).toBe(1)
+    expect(slingshots).toBe(0)
   })
 
   it("bots earn a burn through the same seam (no player-only path)", () => {
@@ -1090,8 +1375,9 @@ describe("assist: determinism and the real arena", () => {
       w.nextCosmicIn = 1e9
       const well = w.wells.find((x) => x.orbit !== null && x.kind === "planet")!
       const b = w.bodies[0]
-      // 160 u out from the planet, aimed straight through it: a short, fast approach.
-      b.x = well.x
+      // 160 u out from the planet with a 100 u lateral offset: a short, fast pass that clears the
+      // surface instead of the head-on plunge this used to certify.
+      b.x = well.x - 100
       b.y = well.y + 160
       b.px = b.x
       b.py = b.y
@@ -1101,30 +1387,42 @@ describe("assist: determinism and the real arena", () => {
       return { w, well, b }
     }
     const probe = build()
-    let peri = -1
-    for (let i = 0; i < 900 && peri < 0; i++) {
+    let dashTick = -1
+    for (let i = 0; i < 900; i++) {
+      if (assistView(probe.w, probe.b).window && probe.b.assist.pass.wellId === probe.well.id) {
+        dashTick = i
+        break
+      }
       step(probe.w, {})
-      if (probe.b.assist.pass.stage === "out") peri = i
     }
-    expect(peri, "the real arena offers a flyby").toBeGreaterThan(0)
-    expect(probe.b.assist.pass.wellId).toBe(probe.well.id)
+    expect(dashTick, "the real arena advertises an eligible window").toBeGreaterThan(0)
 
     const real = build()
     let got: OberthEvent | null = null
+    let solidHits = 0
     let slingshotsOnBurn = -1
+    let minDist = Infinity
+    let windowAtDash = false
     for (let i = 0; i < 900 && !got; i++) {
-      step(real.w, { player: i === peri ? DASH : NONE })
+      minDist = Math.min(minDist, Math.hypot(real.b.x - real.well.x, real.b.y - real.well.y))
+      if (i === dashTick) windowAtDash = assistView(real.w, real.b).window
+      step(real.w, { player: i === dashTick ? DASH : NONE })
+      solidHits += eventsOf(real.w, "solidHit").filter((e) => e.bodyId === "player").length
       const ev = eventsOf(real.w, "oberth")
       if (ev.length > 0) {
         got = ev[0]
-        slingshotsOnBurn = eventsOf(real.w, "slingshot").length
+        slingshotsOnBurn = eventsOf(real.w, "slingshot").filter((e) => e.bodyId === "player").length
       }
     }
+    expect(windowAtDash, "the dash lands on an advertised, eligible window").toBe(true)
+    expect(solidHits, "a genuine pass never touches the surface").toBe(0)
+    expect(minDist, "clear of the solid surface").toBeGreaterThan(real.well.radius + real.b.radius)
     expect(got, "the Vast flyby pays").not.toBeNull()
     expect(got!.moving).toBe(true)
     expect(got!.bodyId).toBe("player")
     expect(got!.quality).toBeGreaterThan(0)
     expect(got!.surge).toBeGreaterThan(0)
+    expect(real.b.stats.oberths).toBe(1)
     expect(slingshotsOnBurn, "the burn itself never pays a slingshot").toBe(0)
   })
 

@@ -42,6 +42,15 @@ export function dismissesLeaderboard(key: string, open: boolean): boolean {
   return open && key === "Escape"
 }
 
+/**
+ * The dash control's accessible name. A payable burn window is announced here and nowhere else:
+ * the name changes while the window is open (and back when it closes) without a live region
+ * speaking a 0.35 s window late, twice, or over the boss line, and without touching the boss text.
+ */
+export function dashName(base: string, burnReady: boolean): string {
+  return burnReady ? `${base}, prograde burn window open` : base
+}
+
 export interface CentreHud {
   /** Mode/level label above the numbers, or null when the phone layout drops it. */
   tag: string | null
