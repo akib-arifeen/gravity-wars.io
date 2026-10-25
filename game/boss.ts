@@ -564,6 +564,7 @@ function spawnBody(
       repulses: 0,
       ults: 0,
       slingshots: 0,
+      oberths: 0,
       assists: 0,
       pickups: 0,
       comets: 0,

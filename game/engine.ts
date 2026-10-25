@@ -9,10 +9,12 @@ import { buildArena } from "./arenas"
 import { gmScale, lethalRadius, updateCosmic } from "./cosmic"
 import {
   assistView,
+  dashAimedAtBurn,
   emptyAssist,
   grantSurge,
   markPaid,
   noteDash,
+  noteDashImpulse,
   resetAssist,
   surgeSpeedMul,
   surgeThrustMul,
@@ -255,6 +257,7 @@ export function createWorld(opts: CreateWorldOptions): World {
         repulses: 0,
         ults: 0,
         slingshots: 0,
+        oberths: 0,
         assists: 0,
         pickups: 0,
         comets: 0,
@@ -384,13 +387,15 @@ export function createWorld(opts: CreateWorldOptions): World {
  *       if vrel < 0: v -= (1 + solidRestitution) * vrel * n and, when -vrel > 40, emit
  *       {type:"solidHit", impulse = -(1 + solidRestitution) * vrel * mass}.
  *  7b. Gravity assists (assist.ts): every living body's flyby pass is opened or advanced. A pass
- *      opens on crossing a well's assist band while closing on the well in the well's own frame;
- *      periapsis is where that relative radial speed flips positive. A pass pays out (Oberth burn)
- *      only if a dash landed within the difficulty's window of that periapsis, the periapsis was
- *      inside the well's peri band, the relative speed was high enough, the payout cooldown and
- *      same-well lock are clear, and the pass has not paid. A burn grants energy and Singularity
- *      charge, a prograde impulse relative to the well, the graded speed surge, stats.slingshots
- *      += 1, sets slingCd so the legacy slingshot cannot double-pay, and emits {type:"oberth"}.
+ *      opens while the body is inside a well's assist band and closing on the well in the well's
+ *      own frame; periapsis is where that relative radial speed flips positive (judged without the
+ *      radial part of a dash impulse fired that same step, so a dash cannot manufacture its own
+ *      periapsis). A pass pays out (Oberth burn) only if a dash landed within the difficulty's
+ *      window of that periapsis, the periapsis was inside the well's peri band, the relative speed
+ *      was high enough, the payout cooldown and same-well lock are clear, and the pass has not
+ *      paid. A burn grants energy and Singularity charge, a prograde impulse relative to the well,
+ *      the graded speed surge, stats.oberths += 1, sets slingCd so the legacy slingshot cannot
+ *      double-pay, and emits {type:"oberth"}. It does not touch stats.slingshots.
  *      A pass that leaves the band or outlives CONFIG.assist.maxPass is dropped unrewarded.
  *  8. Eating, bodies then debris in array order (as before): an alive body eats each debris whose
  *     centre distance < radius: mass += debris.mass; crystals add CONFIG.crystal.energy (clamped)
@@ -411,7 +416,9 @@ export function createWorld(opts: CreateWorldOptions): World {
  *     slingshot.band * well.radius + 60 of any well: energy += slingshot.energy (clamp), ult +=
  *     slingshot.ult (clamp, ultReady as in 8), slingCd = slingshot.cooldown, stats.slingshots += 1,
  *     emit {type:"slingshot", speed}. An Oberth burn in the same step sets slingCd, so it
- *     suppresses this. Movement progression comes from the burn's surge, not from this perk.
+ *     suppresses this; so does a dash aimed at the burn (inside the advertised window) on the
+ *     dash step itself, which would otherwise pay the perk on the dash's own impulse before the
+ *     periapsis is graded. Movement progression comes from the burn's surge, not from this perk.
  * 11. Spawning (placement for dust/rock: if world.debrisField.ringShare > 0, with probability
  *     ringShare (one rand() draw, made only when ringShare > 0) pick a point uniform by area in
  *     the annulus [ringInner, ringOuter], else uniform over the disc of radius arenaRadius; retry
@@ -640,9 +647,14 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
         b.dashCd = ab.dash.cooldown
         b.stats.dashes += 1
         events.push({ type: "dash", bodyId: b.id, x: b.x, y: b.y, dx: ux, dy: uy })
+        // Record the impulse's radial part first: a dash must not create the periapsis it is graded on.
+        noteDashImpulse(b, wells, dashX, dashY)
         // A dash is the Oberth burn only when it lands inside a real flyby's periapsis window.
         const burn = noteDash(b, wells, time)
         if (burn) applyBurn(world, b, burn, events)
+        // A dash aimed at the burn puts its impulse into the flyby, so it must not also earn the
+        // legacy fast-pass perk on the dash frame, before periapsis is graded.
+        else if (dashAimedAtBurn(b)) b.slingCd = Math.max(b.slingCd, CONFIG.slingshot.cooldown)
       }
     }
     if (wantRepulse && b.repulseCd === 0 && b.energy >= ab.repulse.cost) {
@@ -1659,9 +1671,10 @@ function applyBurn(world: World, b: Body, r: BurnReady, events: GameEvent[]): vo
   }
 
   grantSurge(b, r)
-  // The legacy slingshot must not also pay for this pass.
+  // One flyby pays once: suppress the legacy fast-pass perk here rather than let it count the same
+  // pass. Slingshot goals/achievements therefore keep their old trigger and are not earned by burns.
   b.slingCd = Math.max(b.slingCd, CONFIG.slingshot.cooldown)
-  b.stats.slingshots += 1
+  b.stats.oberths += 1
   markPaid(b, r.well.id, world.time)
   events.push({
     type: "oberth",
@@ -1796,6 +1809,7 @@ function freshBody(world: World, id: string, name: string, color: string, skill:
       repulses: 0,
       ults: 0,
       slingshots: 0,
+      oberths: 0,
       assists: 0,
       pickups: 0,
       comets: 0,

@@ -292,11 +292,12 @@ export const CONFIG = {
   /**
    * Gravity assist ("Oberth burn") — the skill reward for a real flyby.
    *
-   * A pass opens when a body crosses a well's assist band while closing on it in the well's own
-   * frame (radial speed <= -minInbound). Periapsis is where that radial speed flips positive; a
-   * dash pressed within `window` of it is the burn. The burn is graded by how deep the periapsis
-   * was and how fast the body moved relative to the well (so a moving well contributes its own
-   * velocity), and pays a short speed surge.
+   * A pass opens whenever a body is inside a well's assist band and closing on it in the well's
+   * own frame (radial speed <= -minInbound), whether it entered the band or was already inside;
+   * leaving the band drops the pass, so there is no re-entry bonus. Periapsis is where that radial
+   * speed flips positive; a dash pressed within `window` of it is the burn. The burn is graded by
+   * how deep the periapsis was and how fast the body moved relative to the well (so a moving well
+   * contributes its own velocity), and pays a short speed surge.
    *
    * Simplified game physics, deliberately: wells are point masses with softened Newtonian
    * gravity, periapsis is sampled at the fixed step, and the "Oberth effect" is a graded reward

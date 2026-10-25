@@ -52,6 +52,9 @@ export function emptyAssist(): AssistState {
       minDist: 0,
       prevVr: 0,
       dashAt: -1,
+      dashRadial: 0,
+      dashIn: false,
+      dashPeriIn: 0,
       periAt: -1,
       periDist: 0,
       periRelSpeed: 0,
@@ -77,6 +80,9 @@ export function resetPass(a: AssistState): void {
   p.minDist = 0
   p.prevVr = 0
   p.dashAt = -1
+  p.dashRadial = 0
+  p.dashIn = false
+  p.dashPeriIn = 0
   p.periAt = -1
   p.periDist = 0
   p.periRelSpeed = 0
@@ -144,10 +150,44 @@ export function noteDash(body: Body, wells: readonly Well[], now: number): BurnR
   if (p.wellId === "" || p.paid) return null
   const w = findWell(wells, p.wellId)
   if (!w) return null
-  // The last dash is the one closest to periapsis, so it is the one graded.
+  // The latest dash is the one graded: a later one replaces an earlier one.
   p.dashAt = now
+  p.dashIn = p.stage === "in"
+  if (p.dashIn) {
+    // Judge an inbound dash by when it was told periapsis would be, not by where its own impulse
+    // later pushes the periapsis: the HUD advertises exactly this prediction, so a dash on the
+    // prompt always qualifies and one outside it never does.
+    const pred = predictPeri(body, w)
+    p.dashPeriIn = pred ? pred.periIn : Infinity
+  }
   if (p.stage !== "out") return null
   return grade(body, w, now)
+}
+
+/**
+ * True when the dash just recorded is aimed at the burn: inside the window the HUD advertised, on
+ * a pass that has not paid yet. The engine uses it to keep the dash's own impulse out of the legacy
+ * fast-pass perk, which would otherwise pay on the dash frame — before periapsis is graded.
+ */
+export function dashAimedAtBurn(body: Body): boolean {
+  const p = body.assist.pass
+  return p.wellId !== "" && !p.paid && p.dashIn && Math.abs(p.dashPeriIn) <= CONFIG.assist.window
+}
+
+/**
+ * Record the radial part of the dash impulse that just fired (u/s). The engine calls this before
+ * the dash payout, so trackPass can subtract it on the same step and refuse a periapsis the dash
+ * itself created. No pass, no record.
+ */
+export function noteDashImpulse(body: Body, wells: readonly Well[], impulseX: number, impulseY: number): void {
+  const p = body.assist.pass
+  if (p.wellId === "") return
+  const w = findWell(wells, p.wellId)
+  if (!w) return
+  const dx = body.x - w.x
+  const dy = body.y - w.y
+  const d = Math.sqrt(dx * dx + dy * dy)
+  p.dashRadial = d > 1e-6 ? (impulseX * dx + impulseY * dy) / d : 0
 }
 
 /**
@@ -168,8 +208,8 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
     const dx = body.x - w.x
     const dy = body.y - w.y
     const dist = Math.sqrt(dx * dx + dy * dy)
-    // Leaving the band ends the pass; a new one can only open from outside, so an orbit that never
-    // exits cannot be re-graded, and a pass pays at most once.
+    // Leaving the band drops the pass. A pass pays at most once, and a later one only opens from a
+    // fresh closing entry that clears the payout cooldown and same-well lock gates below.
     if (dist > assistBand(w)) {
       resetPass(a)
       return null
@@ -182,7 +222,12 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
     }
     const vrx = body.vx - w.vx
     const vry = body.vy - w.vy
-    const vr = dist > 0 ? (dx * vrx + dy * vry) / dist : 0
+    const vrNow = dist > 0 ? (dx * vrx + dy * vry) / dist : 0
+    // A dash this step must not manufacture the periapsis it is graded on: judge the flip on the
+    // radial velocity the dash-free trajectory would have had, i.e. without the impulse's radial
+    // part. Gravity can still turn the approach (that is a real flyby), and a near-tangential dash
+    // at periapsis barely changes the radial term, so those burns still count.
+    const vr = p.dashAt === now ? vrNow - p.dashRadial : vrNow
     p.dist = dist
     if (dist < p.minDist) p.minDist = dist
 
@@ -196,7 +241,7 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
       p.periRelSpeed = Math.sqrt(vrx * vrx + vry * vry)
       if (p.dashAt >= 0) burn = grade(body, w, now)
     }
-    p.prevVr = vr
+    p.prevVr = vrNow
     return burn
   }
 
@@ -227,6 +272,9 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
   p.minDist = bestDist
   p.prevVr = bestDist > 0 ? (dx * (body.vx - best.vx) + dy * (body.vy - best.vy)) / bestDist : 0
   p.dashAt = -1
+  p.dashRadial = 0
+  p.dashIn = false
+  p.dashPeriIn = 0
   p.periAt = -1
   p.periDist = 0
   p.periRelSpeed = 0
@@ -245,10 +293,12 @@ function grade(body: Body, w: Well, now: number): BurnReady | null {
   const A = CONFIG.assist
   if (p.paid || p.periAt < 0 || p.dashAt < 0) return null
   if (a.cd > 0 || wellLocked(a, w.id, now)) return null
-  if (Math.abs(p.dashAt - p.periAt) > assistWindow(body)) return null
+  // Inbound: the dash is timed against the periapsis it predicted (what the HUD showed).
+  // Outbound: the periapsis is already known, so the dash is timed against the real one.
+  const timing = p.dashIn ? p.dashPeriIn : p.dashAt - p.periAt
+  if (!(Math.abs(timing) <= assistWindow(body))) return null
   // A real flyby: periapsis has to be a close pass, not a distant drift through the band.
-  if (p.periDist > w.radius * A.periBand) return null
-  if (p.periRelSpeed < A.minRelSpeed) return null
+  if (!deepEnough(w, p.periDist, p.periRelSpeed)) return null
 
   const span = w.radius * (A.periBand - 1)
   const depth = clamp01(span > 0 ? 1 - (p.periDist - w.radius) / span : 1)
@@ -294,40 +344,80 @@ export function grantSurge(body: Body, burn: BurnReady): void {
 }
 
 /**
- * HUD/renderer view of the pass. For an inbound pass the periapsis time is predicted from the
- * current closing geometry (time to the closest point of a straight-line pass); the graded
- * window still uses the actual periapsis, so the prediction only drives feedback.
+ * HUD/renderer view of the pass. `window` is true only when a dash this frame could actually pay:
+ * the pass is eligible (not paid, not cooling down, not locked to this well), the periapsis is
+ * inside the deep band with enough relative speed, and the timing is inside the dash window.
+ *
+ * For an inbound pass the periapsis is predicted from the current closing geometry (the closest
+ * point of a straight-line pass) and that same prediction is what an inbound dash is timed
+ * against, so "the prompt is up" and "a dash now pays" mean the same thing. Outbound, the real
+ * periapsis is known and is used for both. A pass that cannot pay is never advertised.
  */
 export function assistView(world: { time: number; wells: readonly Well[] }, body: Body): AssistView {
   const a = body.assist
   const p = a.pass
-  if (p.wellId === "" || p.paid) return { wellId: "", stage: "none", window: false, periIn: null }
+  const none: AssistView = { wellId: "", stage: "none", window: false, periIn: null }
+  if (p.wellId === "" || p.paid) return none
   const w = findWell(world.wells, p.wellId)
-  if (!w) return { wellId: "", stage: "none", window: false, periIn: null }
+  if (!w) return none
+  // A cooling-down or same-well-locked pass would not pay, so it must not prompt.
+  if (a.cd > 0 || wellLocked(a, w.id, world.time)) return { ...none, wellId: p.wellId }
   const win = assistWindow(body)
-  let periIn: number | null = null
   if (p.stage === "out" && p.periAt >= 0) {
-    periIn = p.periAt - world.time
-  } else if (p.stage === "in") {
-    const rx = body.x - w.x
-    const ry = body.y - w.y
-    const vx = body.vx - w.vx
-    const vy = body.vy - w.vy
-    const rv = Math.sqrt(vx * vx + vy * vy)
-    if (rv > 1) {
-      const d = Math.sqrt(rx * rx + ry * ry)
-      // Impact parameter of the current relative motion: where the closest approach will be.
-      const b = Math.abs(rx * vy - ry * vx) / rv
-      const along = Math.sqrt(Math.max(0, d * d - b * b))
-      periIn = along / rv
-    }
+    const periIn = p.periAt - world.time
+    const real = deepEnough(w, p.periDist, p.periRelSpeed)
+    return { wellId: p.wellId, stage: "out", window: real && Math.abs(periIn) <= win, periIn }
   }
-  return {
-    wellId: p.wellId,
-    stage: p.stage,
-    window: periIn !== null && Math.abs(periIn) <= win,
-    periIn,
+  if (p.stage === "in") {
+    const pred = predictPeri(body, w)
+    if (!pred) return { wellId: p.wellId, stage: "in", window: false, periIn: null }
+    // A predicted periapsis inside the well's own surface is a collision, not a flyby, and can
+    // never pay. Gravity can only bend the real path closer than this straight-line estimate, so
+    // anything admitted here is genuinely a deep, fast pass.
+    const survivable = pred.impact > w.radius + body.radius
+    const real = survivable && deepEnough(w, pred.impact, pred.rel)
+    return { wellId: p.wellId, stage: "in", window: real && pred.periIn <= win, periIn: pred.periIn }
   }
+  return { wellId: p.wellId, stage: p.stage, window: false, periIn: null }
+}
+
+/**
+ * Whether the burn prompt and the dash control's glow may be shown: a payable pass window, the
+ * dash off cooldown, enough energy for it, and the ability not campaign-locked.
+ */
+export function burnPromptVisible(window: boolean, dashCd: number, energy: number, locked: boolean): boolean {
+  return window && !locked && dashCd <= 0 && energy >= CONFIG.abilities.dash.cost
+}
+
+/** A periapsis close and fast enough, relative to the well, to be a real flyby. */
+function deepEnough(w: Well, periDist: number, periRelSpeed: number): boolean {
+  const A = CONFIG.assist
+  return periDist <= w.radius * A.periBand && periRelSpeed >= A.minRelSpeed
+}
+
+interface PeriPrediction {
+  /** Seconds to the closest point of the current relative motion. */
+  periIn: number
+  /** Impact parameter: the closest approach of a straight-line pass (u). */
+  impact: number
+  /** Current speed relative to the well (u/s). */
+  rel: number
+}
+
+/**
+ * Straight-line prediction of the nearest approach for the body's current relative motion. Gravity
+ * bends a real path closer than this, so `impact` is an upper bound on the real periapsis distance.
+ */
+function predictPeri(body: Body, w: Well): PeriPrediction | null {
+  const rx = body.x - w.x
+  const ry = body.y - w.y
+  const vx = body.vx - w.vx
+  const vy = body.vy - w.vy
+  const rel = Math.sqrt(vx * vx + vy * vy)
+  if (rel <= 1) return null
+  const dist = Math.sqrt(rx * rx + ry * ry)
+  const impact = Math.abs(rx * vy - ry * vx) / rel
+  return { periIn: Math.sqrt(Math.max(0, dist * dist - impact * impact)) / rel, impact, rel }
 }
 
 type TierDef = (typeof CONFIG.assist.tiers)[number]

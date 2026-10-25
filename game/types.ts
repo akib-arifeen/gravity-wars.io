@@ -64,6 +64,8 @@ export interface BodyStats {
   repulses: number
   ults: number
   slingshots: number
+  /** Graded gravity-assist burns earned (separate from the legacy slingshot count). */
+  oberths: number
   /** Rivals that died in a lethal well within abilities.assistWindow after this body's repulse hit them. */
   assists: number
   pickups: number
@@ -73,8 +75,9 @@ export interface BodyStats {
 }
 
 /**
- * One gravity-assist pass around a well (see assist.ts). A pass opens when the body crosses the
- * well's assist band while closing on it in the well's own frame, and is graded at periapsis.
+ * One gravity-assist pass around a well (see assist.ts). A pass opens while the body is inside the
+ * well's assist band and closing on it in the well's own frame, provided the payout gates are
+ * clear, and is graded at periapsis.
  * "none" is outside every band; "in" is inbound; "out" is after periapsis (or after a dash
  * reversed the approach).
  */
@@ -89,8 +92,21 @@ export interface AssistPass {
   minDist: number
   /** Radial velocity (relative to the well) at the previous step, u/s; negative = closing. */
   prevVr: number
-  /** World time of the first dash pressed during this pass, -1 before any. */
+  /** World time of the latest dash pressed during this pass, -1 before any. */
   dashAt: number
+  /**
+   * Radial velocity change (u/s) of that latest dash's impulse. trackPass removes it when judging
+   * the periapsis flip on that step, so a dash cannot manufacture the periapsis it is graded on.
+   */
+  dashRadial: number
+  /**
+   * True when the latest dash was made on the inbound half. Its timing is then judged against the
+   * periapsis the dash predicts (dashPeriIn), the same number the HUD advertised, because the
+   * dash's own impulse moves the real periapsis. Outbound dashes are judged against periAt.
+   */
+  dashIn: boolean
+  /** Predicted seconds to periapsis when that inbound dash was made (Infinity if unknown). */
+  dashPeriIn: number
   /** World time periapsis was crossed, -1 before it. */
   periAt: number
   /** Centre distance and speed relative to the well at periapsis. */
