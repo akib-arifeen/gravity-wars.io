@@ -57,6 +57,8 @@ const RESULT: SubmissionResult = {
   claimedScore: 73,
   traceSteps: 1,
   replayMs: 12,
+  replayCached: false,
+  personalBest: true,
   submittedAt: "2026-10-26T12:04:00.000Z",
   rank: 2,
 }

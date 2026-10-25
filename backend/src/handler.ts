@@ -14,19 +14,29 @@ import {
   getIdempotency,
   getLatestLeagueForDate,
   getLeagueById,
+  getReplayCache,
   getRun,
   getSubmissionByRun,
   insertIdempotency,
   insertRun,
   insertSubmissionIfOpen,
-  rankBefore,
+  putReplayCache,
+  rankOfSubmission,
   type IdempotencyRow,
+  type ReplayCacheRow,
+  type SubmissionRank,
   type SubmissionRow,
 } from "./db.ts"
 import { HttpError, errorResponse, corsHeaders, isLoopbackOrigin, json, readJsonBody, structuredError, structuredLog } from "./http.ts"
-import { RATE_RULES, rateHeaders, takeRateLimit } from "./rate.ts"
+import { RATE_RULES, rateHeaders, takeRateLimit, takeReadRateLimit } from "./rate.ts"
 import { ReplayError, replayDailyRun, type ReplayOutcome } from "./replay.ts"
-import { decodeSubmissionTrace, parseIssueInput, parseSubmissionBinding, type SubmissionBinding } from "./validate.ts"
+import {
+  decodeSubmissionTrace,
+  parseActorId,
+  parseIssueInput,
+  parseSubmissionBinding,
+  type SubmissionBinding,
+} from "./validate.ts"
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 const LEADERBOARD_HISTORY_DAYS = 31
@@ -36,6 +46,14 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 export interface HandlerOptions {
   /** Injectable clock for tests; production uses Date.now. */
   now?: () => number
+}
+
+/** What a response may say about the replay behind its score. */
+interface ReplayReport {
+  /** True when this request reused a stored result instead of replaying the round. */
+  cached: boolean
+  /** The duration this request spent replaying, or null when it spent none. */
+  ms: number | null
 }
 
 export async function handle(request: Request, env: Env, options: HandlerOptions = {}): Promise<Response> {
@@ -125,14 +143,17 @@ async function health(env: Env, now: number): Promise<Response> {
 }
 
 async function issueRun(request: Request, env: Env, now: number, requestId: string): Promise<Response> {
-  const actorHash = await actorKey(env, request)
-  const minute = await takeRateLimit(env.DB, RATE_RULES.issueMinute, actorHash, now)
-  await takeRateLimit(env.DB, RATE_RULES.issueDay, actorHash, now)
+  // The id is the client's own and is checked before anything is written; the IP hash below is
+  // only how this request is rate limited.
+  const actorId = parseActorId(request)
+  const ipHash = await clientIpHash(env, request)
+  const minute = await takeRateLimit(env.DB, RATE_RULES.issueMinute, ipHash, now)
+  await takeRateLimit(env.DB, RATE_RULES.issueDay, ipHash, now)
 
   const { value } = await readJsonBody(request, MAX_ISSUE_BODY_BYTES, { allowEmpty: true })
   const input = parseIssueInput(value)
   const league = leagueFor(new Date(now))
-  const { descriptor, run } = await createRun(now, input.assisted, actorHash)
+  const { descriptor, run } = await createRun(now, input.assisted, actorId)
   await ensureLeague(env.DB, league, now)
   await insertRun(env.DB, run)
 
@@ -155,12 +176,13 @@ async function submitRun(
   now: number,
   requestId: string,
 ): Promise<Response> {
-  const actorHash = await actorKey(env, request)
+  const actorId = parseActorId(request)
   const idempotencyKey = request.headers.get("idempotency-key")
   if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 200 || !/^[\x21-\x7e]+$/.test(idempotencyKey)) {
     throw new HttpError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key must be 8-200 visible ASCII characters")
   }
-  const keyHash = await sha256Hex(`${actorHash}:${runId}:${idempotencyKey}`)
+  // Keyed to the client's own id, so an idempotent retry is recognised for this browser only.
+  const keyHash = await sha256Hex(`${actorId}:${runId}:${idempotencyKey}`)
 
   const { raw, value } = await readJsonBody(request, MAX_BODY_BYTES)
   const requestHash = await sha256Hex(raw)
@@ -176,15 +198,16 @@ async function submitRun(
     await deleteIdempotency(env.DB, keyHash)
   }
 
-  const minute = await takeRateLimit(env.DB, RATE_RULES.submitMinute, actorHash, now)
-  await takeRateLimit(env.DB, RATE_RULES.submitDay, actorHash, now)
+  const ipHash = await clientIpHash(env, request)
+  const minute = await takeRateLimit(env.DB, RATE_RULES.submitMinute, ipHash, now)
+  await takeRateLimit(env.DB, RATE_RULES.submitDay, ipHash, now)
 
   // Cheap shape and binding checks first; the trace is decoded only after the run, actor,
   // ruleset, assisted flag and nonce/token have all been accepted.
   const input = parseSubmissionBinding(value)
   const run = await getRun(env.DB, runId)
   if (!run) throw new HttpError(404, "RUN_NOT_FOUND", "Unknown run")
-  if (run.actorHash !== actorHash) throw new HttpError(403, "INVALID_BINDING", "Run does not belong to this client")
+  if (run.actorId !== actorId) throw new HttpError(403, "INVALID_BINDING", "Run does not belong to this client")
   if (now > run.expiresAt) throw new HttpError(410, "RUN_EXPIRED", "Run descriptor has expired")
 
   const league = await getLeagueById(env.DB, run.leagueId)
@@ -211,11 +234,29 @@ async function submitRun(
   const traceHash = await sha256Hex(input.traceData)
   const existing = await getSubmissionByRun(env.DB, runId)
   if (existing) {
-    return replayExisting(env.DB, existing, league, traceHash, requestHash, keyHash, actorHash, now)
+    return replayExisting(env.DB, existing, league, traceHash, requestHash, keyHash, actorId, now)
   }
 
-  const trace = decodeSubmissionTrace(input)
-  const outcome = replayOrThrow(league, trace.steps)
+  // A repeated identical trace reuses the engine's earlier answer for this run, so a client that
+  // fixed a rejected claim cannot make the Worker replay the round again. Any other trace for this
+  // run misses the cache and goes through the capped replay below.
+  const cached = await getReplayCache(env.DB, runId, traceHash, league.id, league.rulesetVersion)
+  let outcome: ReplayOutcome
+  let traceSteps: number
+  /** What this request may report about its own replay: a cache hit spent none of it. */
+  let replay: ReplayReport
+  if (cached) {
+    outcome = outcomeFromCache(cached)
+    traceSteps = cached.trace_steps
+    replay = { cached: true, ms: null }
+  } else {
+    const trace = decodeSubmissionTrace(input)
+    outcome = replayOrThrow(league, trace.steps)
+    traceSteps = trace.steps.length
+    await putReplayCache(env.DB, cacheRowFor(run, traceHash, league, outcome, traceSteps, now))
+    replay = { cached: false, ms: outcome.replayMs }
+  }
+
   const tolerance = Math.max(1, Math.round(outcome.score * 0.002))
   if (Math.abs(input.claimedScore - outcome.score) > tolerance) {
     structuredLog("submission_mismatch", {
@@ -232,17 +273,19 @@ async function submitRun(
 
   const submissionId = crypto.randomUUID()
   const ranked = run.ranked && !input.assisted
-  const rank = ranked ? await rankBefore(env.DB, run.leagueId, outcome.score, now, submissionId) : null
-  const row = submissionRow(run, input, trace.steps.length, outcome, submissionId, traceHash, now, ranked)
+  const row = submissionRow(run, input, traceSteps, outcome, submissionId, traceHash, now, ranked)
   const inserted = await insertSubmissionIfOpen(env.DB, row, now)
   if (!inserted) {
     const raced = await getSubmissionByRun(env.DB, runId)
-    if (raced) return replayExisting(env.DB, raced, league, traceHash, requestHash, keyHash, actorHash, now)
+    if (raced) return replayExisting(env.DB, raced, league, traceHash, requestHash, keyHash, actorId, now)
     throw new HttpError(409, "RUN_ALREADY_SUBMITTED", "Run was already submitted")
   }
 
-  const body = submissionBody(row, league, rank)
-  const stored = await rememberIdempotency(env.DB, keyHash, requestHash, 201, JSON.stringify(body), actorHash, now)
+  // Read the standing after the row exists: the board keeps one row per actor, so this
+  // submission's place is its position among the actors' bests, not its position in raw rows.
+  const standing = ranked ? await rankOfSubmission(env.DB, submissionId) : null
+  const body = submissionBody(row, league, standing, replay)
+  const stored = await rememberIdempotency(env.DB, keyHash, requestHash, 201, JSON.stringify(body), actorId, now)
   if (stored) return storedResponse(stored)
   structuredLog("submission_verified", {
     requestId,
@@ -251,11 +294,17 @@ async function submitRun(
     leagueId: run.leagueId,
     score: outcome.score,
     claimed: input.claimedScore,
-    steps: trace.steps.length,
-    replayMs: outcome.replayMs,
+    steps: traceSteps,
+    // The replay that produced the score, and whether this request paid for it.
+    replayMs: row.replay_ms,
+    replayCached: replay.cached,
     ranked,
   })
-  return json(body, 201, { ...rateHeaders(minute), "server-timing": `replay;dur=${outcome.replayMs}` })
+  return json(body, 201, {
+    ...rateHeaders(minute),
+    // A cache hit reports that it reused a result rather than claiming a rounded-down 0 ms replay.
+    "server-timing": replay.ms === null ? 'replay;desc="cached"' : `replay;dur=${replay.ms}`,
+  })
 }
 
 async function leaderboard(request: Request, env: Env, url: URL, now: number): Promise<Response> {
@@ -282,9 +331,10 @@ async function leaderboard(request: Request, env: Env, url: URL, now: number): P
     throw new HttpError(422, "INVALID_REQUEST", "limit must be an integer in [1, 50]")
   }
 
-  // Validation is complete before the first D1 write, so an invalid read cannot consume quota.
-  const actorHash = await actorKey(env, request)
-  const hit = await takeRateLimit(env.DB, RATE_RULES.readMinute, actorHash, now)
+  // Validation is complete before the first D1 write, and the read limiter writes only while the
+  // window still has room, so an invalid or already-refused read costs nothing.
+  const ipHash = await clientIpHash(env, request)
+  const hit = await takeReadRateLimit(env.DB, RATE_RULES.readMinute, ipHash, now)
 
   // Resolve the stored league for the date, so history stays readable after a ruleset bump.
   const league = await getLatestLeagueForDate(env.DB, requested)
@@ -311,8 +361,52 @@ function replayOrThrow(league: League, steps: Parameters<typeof replayDailyRun>[
   try {
     return replayDailyRun(league, steps)
   } catch (error) {
-    if (error instanceof ReplayError) throw new HttpError(422, error.code, error.message)
+    if (error instanceof ReplayError) {
+      // The CPU backstop is a server limit, not a bad trace: 503 says "try again", not "send
+      // something else", and no score is produced either way.
+      if (error.code === "REPLAY_BUDGET_EXCEEDED") {
+        throw new HttpError(503, error.code, error.message, { retryAfter: 1 })
+      }
+      throw new HttpError(422, error.code, error.message)
+    }
     throw error
+  }
+}
+
+function outcomeFromCache(row: ReplayCacheRow): ReplayOutcome {
+  return {
+    score: Number(row.score),
+    peakMass: Number(row.peak_mass),
+    ticks: Number(row.ticks),
+    durationS: Number(row.duration_s),
+    winnerId: row.winner_id,
+    // The cost that produced this score, kept so the stored submission records a real provenance
+    // and never a 0 ms that would read as "replaying is free".
+    replayMs: Number(row.replay_ms),
+  }
+}
+
+function cacheRowFor(
+  run: RunRow,
+  traceHash: string,
+  league: League,
+  outcome: ReplayOutcome,
+  traceSteps: number,
+  now: number,
+): ReplayCacheRow {
+  return {
+    run_id: run.id,
+    trace_hash: traceHash,
+    league_id: league.id,
+    ruleset_version: league.rulesetVersion,
+    score: outcome.score,
+    peak_mass: outcome.peakMass,
+    ticks: outcome.ticks,
+    trace_steps: traceSteps,
+    duration_s: outcome.durationS,
+    winner_id: outcome.winnerId,
+    replay_ms: outcome.replayMs,
+    created_at: now,
   }
 }
 
@@ -330,7 +424,7 @@ function submissionRow(
     id,
     run_id: run.id,
     league_id: run.leagueId,
-    actor_hash: run.actorHash,
+    actor_id: run.actorId,
     score: outcome.score,
     claimed_score: input.claimedScore,
     trace_hash: traceHash,
@@ -344,7 +438,12 @@ function submissionRow(
   }
 }
 
-function submissionBody(row: SubmissionRow, league: League, rank: number | null): Record<string, unknown> {
+function submissionBody(
+  row: SubmissionRow,
+  league: League,
+  standing: SubmissionRank | null,
+  replay: ReplayReport,
+): Record<string, unknown> {
   return {
     submissionId: row.id,
     runId: row.run_id,
@@ -358,9 +457,15 @@ function submissionBody(row: SubmissionRow, league: League, rank: number | null)
     score: row.score,
     claimedScore: row.claimed_score,
     traceSteps: row.trace_steps,
-    replayMs: row.replay_ms,
+    // Null, not 0, when this request reused a stored result: no replay ran, so there is no
+    // duration to report and none should be inferred.
+    replayMs: replay.ms,
+    replayCached: replay.cached,
+    // The board keeps one row per actor: a run that is not this actor's best has no row and no
+    // rank, and `personalBest: false` says why rather than leaving the client to guess.
+    personalBest: standing === null ? false : standing.best,
+    rank: standing === null ? null : standing.rank,
     submittedAt: new Date(row.submitted_at).toISOString(),
-    rank,
   }
 }
 
@@ -371,7 +476,7 @@ async function replayExisting(
   traceHash: string,
   requestHash: string,
   keyHash: string,
-  actorHash: string,
+  actorId: string,
   now: number,
 ): Promise<Response> {
   if (existing.trace_hash !== traceHash) {
@@ -379,12 +484,10 @@ async function replayExisting(
       details: { submissionId: existing.id },
     })
   }
-  const rank =
-    existing.ranked === 1
-      ? await rankBefore(db, existing.league_id, existing.score, existing.submitted_at, existing.id)
-      : null
-  const body = submissionBody(existing, league, rank)
-  const stored = await rememberIdempotency(db, keyHash, requestHash, 200, JSON.stringify(body), actorHash, now)
+  const standing = existing.ranked === 1 ? await rankOfSubmission(db, existing.id) : null
+  // This request did not replay either: it found the run already submitted and reused that answer.
+  const body = submissionBody(existing, league, standing, { cached: true, ms: null })
+  const stored = await rememberIdempotency(db, keyHash, requestHash, 200, JSON.stringify(body), actorId, now)
   if (stored) return storedResponse(stored)
   return json(body, 200, { "idempotent-replay": "true" })
 }
@@ -400,12 +503,12 @@ async function rememberIdempotency(
   requestHash: string,
   status: number,
   body: string,
-  actorHash: string,
+  actorId: string,
   now: number,
 ): Promise<IdempotencyRow | null> {
   const inserted = await insertIdempotency(db, {
     key_hash: keyHash,
-    actor_hash: actorHash,
+    actor_id: actorId,
     request_hash: requestHash,
     status,
     response_json: body,
@@ -432,7 +535,12 @@ function storedResponse(prior: IdempotencyRow): Response {
   })
 }
 
-async function actorKey(env: Env, request: Request): Promise<string> {
+/**
+ * The rate-limit subject: an HMAC of the request IP under a Worker secret. The raw address is
+ * never stored or logged, and nothing else in this API reads it — identity comes from the
+ * client's own opaque id, so a changed or shared address does not lose or merge a run.
+ */
+async function clientIpHash(env: Env, request: Request): Promise<string> {
   if (!env.ACTOR_HASH_KEY) {
     throw new HttpError(500, "CONFIGURATION_ERROR", "ACTOR_HASH_KEY is not configured")
   }

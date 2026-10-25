@@ -2,6 +2,12 @@ import { RunTraceError, decodeTrace, type RunTrace } from "../../game/runTrace.t
 import { HttpError } from "./http.ts"
 import { MAX_TRACE_STEPS } from "./daily.ts"
 
+/** The header the browser sends its own opaque id in. See `parseActorId`. */
+export const ACTOR_ID_HEADER = "x-gw-actor"
+
+/** A 128-bit client-minted id, lowercase hex. It carries no information the server can decode. */
+const ACTOR_ID_PATTERN = /^[a-f0-9]{32}$/
+
 export interface IssueInput {
   assisted: boolean
 }
@@ -13,6 +19,24 @@ export interface SubmissionBinding {
   assisted: boolean
   claimedScore: number
   traceData: string
+}
+
+/**
+ * The client's own opaque id, from the `x-gw-actor` header. The server checks only that it is the
+ * shape a browser mints (128 random bits, hex) and never derives it from, or compares it with, the
+ * request's network address: a run follows the browser, not the connection it arrives on. It is
+ * not authentication — any client may present any id — so it identifies a browser, not a person.
+ */
+export function parseActorId(request: Request): string {
+  const raw = request.headers.get(ACTOR_ID_HEADER)
+  if (raw === null || raw.trim() === "") {
+    throw new HttpError(400, "ACTOR_ID_REQUIRED", `${ACTOR_ID_HEADER} is required: send the id this browser stored`)
+  }
+  const value = raw.trim().toLowerCase()
+  if (!ACTOR_ID_PATTERN.test(value)) {
+    throw new HttpError(400, "ACTOR_ID_INVALID", `${ACTOR_ID_HEADER} must be 32 lowercase hex characters`)
+  }
+  return value
 }
 
 export function parseIssueInput(value: unknown): IssueInput {

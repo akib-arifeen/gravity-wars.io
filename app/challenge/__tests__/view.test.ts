@@ -18,6 +18,8 @@ const RESULT: SubmissionResult = {
   claimedScore: 73,
   traceSteps: 9100,
   replayMs: 480,
+  replayCached: false,
+  personalBest: true,
   submittedAt: "2026-10-26T12:04:00.000Z",
   rank: 3,
 }
@@ -68,6 +70,18 @@ describe("challengeView", () => {
       replayed: false,
     })
     expect(view).toMatchObject({ headline: "Stored, not verified", verified: false })
+  })
+
+  it("says a run did not place when a better run of the same browser holds the row", () => {
+    const view = challengeView({
+      phase: "success",
+      attempt: 1,
+      result: { ...RESULT, rank: null, personalBest: false },
+      replayed: false,
+    })
+    expect(view).toMatchObject({ tone: "success", score: 73, rank: null, ranked: true, verified: true })
+    expect(view.detail).toContain("better run of yours")
+    expect(view.detail).not.toContain("Rank ")
   })
 
   it("marks a replayed answer as the stored result", () => {

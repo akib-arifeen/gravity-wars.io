@@ -20,7 +20,7 @@ beforeEach(async () => {
 async function insertRun(id: string, assisted: number, ranked: number): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO runs (id, league_id, actor_hash, nonce_hash, token_hash, assisted, ranked, issued_at, expires_at)
+      `INSERT INTO runs (id, league_id, actor_id, nonce_hash, token_hash, assisted, ranked, issued_at, expires_at)
        VALUES (?, ?, 'actor', ?, ?, ?, ?, 0, 1000)`,
     )
     .bind(id, LEAGUE, `nonce-${id}`, `token-${id}`, assisted, ranked)
@@ -31,7 +31,7 @@ async function insertSubmission(id: string, runId: string, assisted: number, ran
   await db
     .prepare(
       `INSERT INTO submissions
-         (id, run_id, league_id, actor_hash, score, claimed_score, trace_hash, trace_steps,
+         (id, run_id, league_id, actor_id, score, claimed_score, trace_hash, trace_steps,
           assisted, ranked, verified, submitted_at, replay_ms, engine)
        VALUES (?, ?, ?, 'actor', 10, 10, 'trace', 1, ?, ?, 1, 0, 1, 'test')`,
     )
@@ -70,5 +70,64 @@ describe("daily schema guards", () => {
       .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'runs_actor_issued'`)
       .first()
     expect(row).toBeNull()
+  })
+
+  it("indexes the board's per-actor dedupe", async () => {
+    const row = await db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'submissions_actor_best'`)
+      .first<{ name: string }>()
+    expect(row?.name).toBe("submissions_actor_best")
+  })
+
+  it("keeps one replay cache row per (run, trace) and allows another trace for the same run", async () => {
+    const insert = (traceHash: string) =>
+      db
+        .prepare(
+          `INSERT INTO replay_cache
+             (run_id, trace_hash, league_id, ruleset_version, score, peak_mass, ticks, trace_steps,
+              duration_s, winner_id, replay_ms, created_at)
+           VALUES ('run-1', ?, ?, 1, 42, 42.4, 100, 100, 12.5, 'player', 7, 0)`,
+        )
+        .bind(traceHash, LEAGUE)
+        .run()
+
+    await insert("trace-a")
+    await expect(insert("trace-a")).rejects.toThrow(/UNIQUE constraint failed/)
+    await insert("trace-b")
+    const row = await db.prepare("SELECT COUNT(*) AS n FROM replay_cache").first<{ n: number }>()
+    expect(Number(row?.n)).toBe(2)
+  })
+
+  it("refuses a negative cached score", async () => {
+    await expect(
+      db
+        .prepare(
+          `INSERT INTO replay_cache
+             (run_id, trace_hash, league_id, ruleset_version, score, peak_mass, ticks, trace_steps,
+              duration_s, winner_id, replay_ms, created_at)
+           VALUES ('run-1', 'trace', ?, 1, -1, -1, 1, 1, 1, null, 1, 0)`,
+        )
+        .bind(LEAGUE)
+        .run(),
+    ).rejects.toThrow(/CHECK constraint failed/)
+  })
+
+  it("stores no raw address anywhere in the schema", async () => {
+    const tables = await db
+      .prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'table'`)
+      .all<{ name: string; sql: string }>()
+    for (const table of tables.results ?? []) {
+      // The only network-shaped column is the HMAC'd rate-limit subject; nothing stores an address
+      // and nothing stores the old IP-derived actor hash.
+      expect(table.sql).not.toMatch(/actor_hash|cf_connecting|raw_ip|ip_address/)
+    }
+    expect((tables.results ?? []).map((t) => t.name).sort()).toEqual([
+      "idempotency_keys",
+      "leagues",
+      "rate_limits",
+      "replay_cache",
+      "runs",
+      "submissions",
+    ])
   })
 })

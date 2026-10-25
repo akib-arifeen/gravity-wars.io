@@ -5,7 +5,7 @@ export interface SubmissionRow {
   id: string
   run_id: string
   league_id: string
-  actor_hash: string
+  actor_id: string
   score: number
   claimed_score: number
   trace_hash: string
@@ -20,7 +20,7 @@ export interface SubmissionRow {
 
 export interface IdempotencyRow {
   key_hash: string
-  actor_hash: string
+  actor_id: string
   request_hash: string
   status: number
   response_json: string
@@ -34,6 +34,45 @@ export interface LeaderboardRow {
   submitted_at: number
   assisted: number
 }
+
+export interface ReplayCacheRow {
+  run_id: string
+  trace_hash: string
+  league_id: string
+  ruleset_version: number
+  score: number
+  peak_mass: number
+  ticks: number
+  trace_steps: number
+  duration_s: number
+  winner_id: string | null
+  replay_ms: number
+  created_at: number
+}
+
+/** What a submission's own standing on the board is. */
+export interface SubmissionRank {
+  /** 1-based position among the board's best-per-actor rows; null when it has no row. */
+  rank: number | null
+  /** False when a better run of the same actor already holds the actor's row. */
+  best: boolean
+}
+
+/**
+ * Every actor's best rankable submission in a league, one row per actor. "Best" is the board's own
+ * order — score, then earlier submission, then id — so a tie is resolved the same way everywhere.
+ * The board, the rank of a new submission and its personal-best flag all read this one shape.
+ */
+const BEST_PER_ACTOR = `SELECT s.* FROM submissions s
+  WHERE s.league_id = ? AND s.ranked = 1 AND s.verified = 1 AND s.assisted = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM submissions b
+      WHERE b.league_id = s.league_id AND b.actor_id = s.actor_id
+        AND b.ranked = 1 AND b.verified = 1 AND b.assisted = 0
+        AND (b.score > s.score
+          OR (b.score = s.score AND (b.submitted_at < s.submitted_at
+            OR (b.submitted_at = s.submitted_at AND b.id < s.id))))
+    )`
 
 export async function ensureLeague(db: D1Database, league: League, now: number): Promise<void> {
   await db
@@ -75,13 +114,13 @@ export async function insertRun(db: D1Database, run: RunRow): Promise<void> {
   await db
     .prepare(
       `INSERT INTO runs
-         (id, league_id, actor_hash, nonce_hash, token_hash, assisted, ranked, issued_at, expires_at)
+         (id, league_id, actor_id, nonce_hash, token_hash, assisted, ranked, issued_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       run.id,
       run.leagueId,
-      run.actorHash,
+      run.actorId,
       run.nonceHash,
       run.tokenHash,
       run.assisted ? 1 : 0,
@@ -98,7 +137,7 @@ export async function getRun(db: D1Database, runId: string): Promise<RunRow | nu
   return {
     id: String(row.id),
     leagueId: String(row.league_id),
-    actorHash: String(row.actor_hash),
+    actorId: String(row.actor_id),
     nonceHash: String(row.nonce_hash),
     tokenHash: String(row.token_hash),
     assisted: Number(row.assisted) === 1,
@@ -116,23 +155,32 @@ export async function getSubmissionByRun(db: D1Database, runId: string): Promise
   return row ?? null
 }
 
-/** 1-based rank by score, then earlier submission, then id: the same order the board uses. */
-export async function rankBefore(
-  db: D1Database,
-  leagueId: string,
-  score: number,
-  submittedAt: number,
-  id: string,
-): Promise<number> {
-  const row = await db
+/**
+ * A submission's place on the best-per-actor board. Two reads: whether this submission is its
+ * actor's row at all, then how many rows sort ahead of it. A submission that is not its actor's
+ * best has no row on the board and no rank.
+ */
+export async function rankOfSubmission(db: D1Database, submissionId: string): Promise<SubmissionRank | null> {
+  const own = await db
+    .prepare(`SELECT id, league_id, score, submitted_at FROM submissions WHERE id = ?`)
+    .bind(submissionId)
+    .first<{ id: string; league_id: string; score: number; submitted_at: number }>()
+  if (!own) return null
+
+  const holder = await db
+    .prepare(`SELECT 1 AS ok FROM (${BEST_PER_ACTOR}) WHERE id = ?`)
+    .bind(own.league_id, own.id)
+    .first<{ ok: number }>()
+  if (!holder) return { rank: null, best: false }
+
+  const ahead = await db
     .prepare(
-      `SELECT COUNT(*) AS n FROM submissions
-       WHERE league_id = ? AND ranked = 1 AND verified = 1 AND assisted = 0
-         AND (score > ? OR (score = ? AND (submitted_at < ? OR (submitted_at = ? AND id < ?))))`,
+      `SELECT COUNT(*) AS n FROM (${BEST_PER_ACTOR})
+       WHERE score > ? OR (score = ? AND (submitted_at < ? OR (submitted_at = ? AND id < ?)))`,
     )
-    .bind(leagueId, score, score, submittedAt, submittedAt, id)
+    .bind(own.league_id, own.score, own.score, own.submitted_at, own.submitted_at, own.id)
     .first<{ n: number }>()
-  return Number(row?.n ?? 0) + 1
+  return { rank: Number(ahead?.n ?? 0) + 1, best: true }
 }
 
 /**
@@ -148,7 +196,7 @@ export async function insertSubmissionIfOpen(
   const insert = db
     .prepare(
       `INSERT INTO submissions
-         (id, run_id, league_id, actor_hash, score, claimed_score, trace_hash, trace_steps,
+         (id, run_id, league_id, actor_id, score, claimed_score, trace_hash, trace_steps,
           assisted, ranked, verified, submitted_at, replay_ms, engine)
        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        WHERE EXISTS (SELECT 1 FROM runs WHERE id = ? AND consumed_at IS NULL)`,
@@ -157,7 +205,7 @@ export async function insertSubmissionIfOpen(
       submission.id,
       submission.run_id,
       submission.league_id,
-      submission.actor_hash,
+      submission.actor_id,
       submission.score,
       submission.claimed_score,
       submission.trace_hash,
@@ -177,6 +225,7 @@ export async function insertSubmissionIfOpen(
   return (results[0]?.meta.changes ?? 0) === 1
 }
 
+/** The board: one row per actor, their best. No ids, hashes or network data leave this query. */
 export async function getLeaderboard(
   db: D1Database,
   leagueId: string,
@@ -184,14 +233,60 @@ export async function getLeaderboard(
 ): Promise<LeaderboardRow[]> {
   const result = await db
     .prepare(
-      `SELECT id, score, submitted_at, assisted FROM submissions
-       WHERE league_id = ? AND ranked = 1 AND verified = 1 AND assisted = 0
+      `SELECT id, score, submitted_at, assisted FROM (${BEST_PER_ACTOR})
        ORDER BY score DESC, submitted_at ASC, id ASC
        LIMIT ?`,
     )
     .bind(leagueId, limit)
     .all<LeaderboardRow>()
   return result.results ?? []
+}
+
+/**
+ * The stored replay for this exact (run, trace), if any. A hit means the engine already replayed
+ * these inputs under this league and ruleset, so the request can reuse that result instead of
+ * spending the CPU again. A row for another league or ruleset is ignored, not trusted.
+ */
+export async function getReplayCache(
+  db: D1Database,
+  runId: string,
+  traceHash: string,
+  leagueId: string,
+  rulesetVersion: number,
+): Promise<ReplayCacheRow | null> {
+  const row = await db
+    .prepare(`SELECT * FROM replay_cache WHERE run_id = ? AND trace_hash = ?`)
+    .bind(runId, traceHash)
+    .first<ReplayCacheRow>()
+  if (!row) return null
+  if (row.league_id !== leagueId || Number(row.ruleset_version) !== rulesetVersion) return null
+  return row
+}
+
+/** Remember a successful replay. A concurrent identical replay may already have stored it. */
+export async function putReplayCache(db: D1Database, row: ReplayCacheRow): Promise<void> {
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO replay_cache
+         (run_id, trace_hash, league_id, ruleset_version, score, peak_mass, ticks, trace_steps,
+          duration_s, winner_id, replay_ms, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.run_id,
+      row.trace_hash,
+      row.league_id,
+      row.ruleset_version,
+      row.score,
+      row.peak_mass,
+      row.ticks,
+      row.trace_steps,
+      row.duration_s,
+      row.winner_id,
+      row.replay_ms,
+      row.created_at,
+    )
+    .run()
 }
 
 export async function getIdempotency(db: D1Database, keyHash: string): Promise<IdempotencyRow | null> {
@@ -207,10 +302,10 @@ export async function insertIdempotency(db: D1Database, row: IdempotencyRow): Pr
   const result = await db
     .prepare(
       `INSERT OR IGNORE INTO idempotency_keys
-         (key_hash, actor_hash, request_hash, status, response_json, created_at, expires_at)
+         (key_hash, actor_id, request_hash, status, response_json, created_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(row.key_hash, row.actor_hash, row.request_hash, row.status, row.response_json, row.created_at, row.expires_at)
+    .bind(row.key_hash, row.actor_id, row.request_hash, row.status, row.response_json, row.created_at, row.expires_at)
     .run()
   return (result.meta.changes ?? 0) === 1
 }

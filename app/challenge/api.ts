@@ -8,9 +8,18 @@
 
 import { ARENA_IDS } from "@/game/arenas"
 import type { ArenaId, Difficulty } from "@/game/types"
+import { loadActorId } from "./actor"
 
 /** Build-time setting. Empty (the default) keeps the experimental UI off. */
 export const CHALLENGE_API_ENV = "NEXT_PUBLIC_GW_CHALLENGE_API"
+
+/**
+ * The browser's own id travels on the two POST routes and nowhere else. Both already need a
+ * preflight (JSON body, `Idempotency-Key`), so the id adds no round trip there; a leaderboard read
+ * is a plain GET that needs no identity, and a custom header on it would force a preflight it does
+ * not otherwise need.
+ */
+const ACTOR_HEADER = "x-gw-actor"
 
 const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]"]
 const DIFFICULTIES: Difficulty[] = ["easy", "normal", "hard"]
@@ -85,7 +94,21 @@ export interface SubmissionResult {
   score: number
   claimedScore: number
   traceSteps: number
-  replayMs: number
+  /**
+   * The replay duration this request spent. Null when `replayCached` is true: a reused result has
+   * no duration of its own, and 0 would read as a free replay.
+   */
+  replayMs: number | null
+  /**
+   * True when this request reused a stored result — the replay cache for this exact trace, or a
+   * run that was already submitted — instead of replaying the round.
+   */
+  replayCached: boolean
+  /**
+   * The board keeps one row per browser. False means a better run of this browser holds the row,
+   * so this run has no place of its own and `rank` is null.
+   */
+  personalBest: boolean
   submittedAt: string
   rank: number | null
 }
@@ -127,12 +150,15 @@ export class ChallengeApiError extends Error {
 
 export interface ChallengeClientOptions {
   base: string
+  /** The browser's own opaque id. Called per request; defaults to the stored one. */
+  actorId?: () => string
   fetchImpl?: typeof fetch
   timeoutMs?: number
 }
 
 export function createChallengeClient(options: ChallengeClientOptions): ChallengeClient {
   const base = options.base.replace(/\/+$/, "")
+  const actorId = options.actorId ?? (() => loadActorId())
   const fetchImpl = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args))
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
@@ -164,7 +190,7 @@ export function createChallengeClient(options: ChallengeClientOptions): Challeng
     async issue(assisted) {
       const response = await send("/v1/daily/runs", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", [ACTOR_HEADER]: actorId() },
         body: JSON.stringify({ assisted }),
       })
       if (response.status !== 201) throw refusal(response)
@@ -188,7 +214,7 @@ export function createChallengeClient(options: ChallengeClientOptions): Challeng
       })
       const response = await send(input.descriptor.submission.path, {
         method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": key },
+        headers: { "content-type": "application/json", "idempotency-key": key, [ACTOR_HEADER]: actorId() },
         body,
       })
       if (response.status !== 200 && response.status !== 201) throw refusal(response)
@@ -272,6 +298,10 @@ function parseSubmission(value: unknown): SubmissionResult {
   const body = record(value, "submission")
   const rankValue = body.rank
   const rank = rankValue === null || rankValue === undefined ? null : whole(rankValue, "rank", 1, 1_000_000)
+  // A reused result reports no duration. Null or absent is that; a number is a measured replay.
+  const msValue = body.replayMs
+  const replayMs =
+    msValue === null || msValue === undefined ? null : whole(msValue, "replayMs", 0, 10_000_000)
   return {
     submissionId: text(body.submissionId, "submissionId"),
     runId: text(body.runId, "runId"),
@@ -285,7 +315,9 @@ function parseSubmission(value: unknown): SubmissionResult {
     score: whole(body.score, "score", 0, 1_000_000_000),
     claimedScore: whole(body.claimedScore, "claimedScore", 0, 1_000_000_000),
     traceSteps: whole(body.traceSteps, "traceSteps", 1, 10_000_000),
-    replayMs: whole(body.replayMs, "replayMs", 0, 10_000_000),
+    replayMs,
+    replayCached: bool(body.replayCached, "replayCached"),
+    personalBest: bool(body.personalBest, "personalBest"),
     submittedAt: text(body.submittedAt, "submittedAt"),
     rank,
   }

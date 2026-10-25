@@ -45,11 +45,16 @@ function submissionBody(overrides: Record<string, unknown> = {}): Record<string,
     claimedScore: 73,
     traceSteps: 9100,
     replayMs: 480,
+    replayCached: false,
+    personalBest: true,
     submittedAt: "2026-10-26T12:04:00.000Z",
     rank: 3,
     ...overrides,
   }
 }
+
+/** The id this test's client presents. The Worker binds a run to it, not to an address. */
+const ACTOR_ID = "ab".repeat(16)
 
 interface Call {
   url: string
@@ -67,7 +72,7 @@ function fakeFetch(replies: (call: Call) => Response | Promise<Response>) {
 }
 
 function client(fetchImpl: typeof fetch, base = "http://localhost:5173") {
-  return createChallengeClient({ base, fetchImpl, timeoutMs: 50 })
+  return createChallengeClient({ base, fetchImpl, timeoutMs: 50, actorId: () => ACTOR_ID })
 }
 
 const jsonResponse = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -107,6 +112,33 @@ describe("resolveChallengeBase", () => {
 })
 
 describe("descriptor", () => {
+  it("identifies the client on the two POST calls and on nothing else", async () => {
+    // A read must stay a CORS-simple request, so the id belongs on the POSTs that already need a
+    // preflight. This client only ever POSTs; any other method would be a bug, not a shortcut.
+    const { fetchImpl, calls } = fakeFetch((call) =>
+      call.url.endsWith("/v1/daily/runs")
+        ? jsonResponse(descriptorBody(), 201)
+        : jsonResponse(submissionBody(), 201),
+    )
+    const api = client(fetchImpl)
+    const descriptor = await api.issue(false)
+    await api.submit({
+      descriptor,
+      traceData: "GWT1data",
+      claimedScore: 73,
+      idempotencyKey: "run-key-0001",
+    })
+
+    expect(calls).toHaveLength(2)
+    expect(calls.map((call) => call.init.method)).toEqual(["POST", "POST"])
+    for (const call of calls) {
+      expect(new Headers(call.init.headers).get("x-gw-actor")).toBe(ACTOR_ID)
+    }
+    // Only the POST routes name the client: the header is not on a helper every request shares.
+    expect(calls[0].url).toBe("http://localhost:5173/v1/daily/runs")
+    expect(calls[1].url).toBe(`http://localhost:5173/v1/daily/runs/${RUN_ID}/submissions`)
+  })
+
   it("posts the assisted declaration and returns the server's values untouched", async () => {
     const { fetchImpl, calls } = fakeFetch(() => jsonResponse(descriptorBody({ assisted: true, ranked: false }), 201))
     const descriptor = await client(fetchImpl).issue(true)
@@ -114,7 +146,9 @@ describe("descriptor", () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe("http://localhost:5173/v1/daily/runs")
     expect(calls[0].init.method).toBe("POST")
-    expect(new Headers(calls[0].init.headers).get("content-type")).toBe("application/json")
+    const issuedHeaders = new Headers(calls[0].init.headers)
+    expect(issuedHeaders.get("content-type")).toBe("application/json")
+    expect(issuedHeaders.get("x-gw-actor")).toBe(ACTOR_ID)
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ assisted: true })
 
     expect(descriptor.challenge).toEqual({
@@ -181,6 +215,7 @@ describe("submission", () => {
     expect(calls[0].url).toBe(`http://localhost:5173/v1/daily/runs/${RUN_ID}/submissions`)
     const headers = new Headers(calls[0].init.headers)
     expect(headers.get("idempotency-key")).toBe("run-key-0001")
+    expect(headers.get("x-gw-actor")).toBe(ACTOR_ID)
     const body = JSON.parse(String(calls[0].init.body))
     expect(Object.keys(body).sort()).toEqual(["assisted", "claimedScore", "nonce", "rulesetVersion", "token", "trace"])
     expect(body).toMatchObject({
@@ -244,12 +279,42 @@ describe("submission", () => {
     }
   })
 
+  it("reads the server's personal-best and cached-replay flags instead of guessing", async () => {
+    const { fetchImpl } = fakeFetch(() =>
+      jsonResponse(submissionBody({ rank: null, personalBest: false, replayCached: true, replayMs: null }), 201),
+    )
+    const outcome = await client(fetchImpl).submit(input)
+    expect(outcome.result).toMatchObject({
+      rank: null,
+      personalBest: false,
+      replayCached: true,
+      replayMs: null,
+      ranked: true,
+    })
+  })
+
+  it("reports a cached answer as having no replay duration rather than a free one", async () => {
+    // Null is the server saying "this request did not replay"; the client must not turn that into
+    // a 0 ms and then present it as a replay that cost nothing.
+    const { fetchImpl } = fakeFetch(() => jsonResponse(submissionBody({ replayCached: true, replayMs: null }), 201))
+    const outcome = await client(fetchImpl).submit(input)
+    expect(outcome.result.replayCached).toBe(true)
+    expect(outcome.result.replayMs).toBeNull()
+
+    const omittedFetch = fakeFetch(() => jsonResponse(submissionBody({ replayMs: undefined }), 201))
+    const omitted = await client(omittedFetch.fetchImpl).submit(input)
+    expect(omitted.result.replayMs).toBeNull()
+  })
+
   it("refuses a malformed success answer instead of showing it as a verified score", async () => {
     for (const body of [
       submissionBody({ score: "73" }),
       submissionBody({ score: -1 }),
       submissionBody({ rank: 0 }),
       submissionBody({ verified: "yes" }),
+      submissionBody({ personalBest: "yes" }),
+      submissionBody({ replayCached: undefined }),
+      submissionBody({ replayMs: "slow" }),
       submissionBody({ submissionId: undefined }),
     ]) {
       const { fetchImpl } = fakeFetch(() => jsonResponse(body, 201))
