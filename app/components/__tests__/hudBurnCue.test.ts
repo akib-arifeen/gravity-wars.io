@@ -59,7 +59,7 @@ describe("the burn window's accessible channel", () => {
     const open = hudMarkup(true)
 
     expect(closed).toContain('aria-label="Dash (Shift)"')
-    expect(open).toContain('aria-label="Dash (Shift), prograde burn window open"')
+    expect(open).toContain('aria-label="Dash (Shift), DASH ALONG PATH (prograde burn window open)"')
     expect(closed).not.toContain('data-burn="1"')
     expect(open).toContain('data-burn="1"')
 
@@ -88,7 +88,7 @@ describe("the burn window's accessible channel", () => {
     const open = renderToStaticMarkup(createElement(TouchControls, { input, hud: view(true) }))
 
     expect(closed).toContain('aria-label="Dash"')
-    expect(open).toContain('aria-label="Dash, prograde burn window open"')
+    expect(open).toContain('aria-label="Dash, DASH ALONG PATH (prograde burn window open)"')
     expect(closed).not.toContain('data-burn="1"')
     expect(open).toContain('data-burn="1"')
   })

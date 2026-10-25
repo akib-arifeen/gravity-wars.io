@@ -330,6 +330,8 @@ body {
     max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px));
   background: rgba(2, 3, 10, 0.5);
   -webkit-overflow-scrolling: touch;
+  /* A drag inside a scrolling overlay must not chain into the page behind it. */
+  overscroll-behavior: contain;
 }
 
 .gw-panel {
@@ -2744,7 +2746,3 @@ body {
   color: #ffd36b;
 }
 
-/* A drag inside the scrolling menu must not chain into the page behind the fixed overlay. */
-.gw-overlay {
-  overscroll-behavior: contain;
-}

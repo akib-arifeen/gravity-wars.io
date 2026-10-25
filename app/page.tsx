@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { emptyProfile, loadProfile, type AchievementDef } from "@/game/achievements"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { emptyProfile, loadProfile, PROFILE_KEY, type AchievementDef } from "@/game/achievements"
 import { ARENA_IDS } from "@/game/arenas"
 import { createSfx, type Sfx } from "@/game/audio"
 import { type BossHud } from "@/game/boss"
@@ -9,6 +9,7 @@ import {
   ABILITY_UNLOCKS,
   CAMPAIGN_LEVELS,
   allRelicsFound,
+  CAMPAIGN_PROGRESS_KEY,
   currentLevel,
   emptyProgress,
   evaluateBonus,
@@ -23,7 +24,7 @@ import {
   type CampaignLevel,
   type CampaignProgress,
 } from "@/game/campaign"
-import { dailyScore, dailyStreak, emptyDaily, loadDaily, recordDailyRun, refreshDaily, saveDaily, type DailyConfig, type DailyProgress } from "@/game/daily"
+import { dailyScore, dailyStreak, DAILY_KEY, emptyDaily, loadDaily, recordDailyRun, refreshDaily, saveDaily, type DailyConfig, type DailyProgress } from "@/game/daily"
 import { recordsRoundBest, runArena, type RunKind } from "@/game/run-summary"
 import { shareCard, shareOrCopy } from "@/game/share"
 import { ARENAS } from "@/game/arenas"
@@ -34,6 +35,7 @@ import { Hud } from "./components/Hud"
 import { ProfilePanel } from "./components/Profile"
 import {
   ARENA_CHOICES,
+  BEST_KEY,
   EndScreen,
   MenuScreen,
   PauseScreen,
@@ -74,6 +76,21 @@ function newSeed(): number {
 }
 
 const FIRST_RUN = startDefaults({})
+
+/**
+ * Restore the stored menu choices before the browser paints. A plain effect would paint the
+ * first-run menu first and then swap in the player's own choice, which reads as a flash; a layout
+ * effect runs after hydration and before paint. It never runs on the server, so the HTML the
+ * server sends still matches the first-run defaults the client hydrates with.
+ */
+const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect
+
+/**
+ * Any of these keys means this browser has played before: a saved best, profile, daily record,
+ * campaign progress, or a menu choice from an earlier visit. An existing player can be missing any
+ * single one, `gw:difficulty` included, so the first-run rule reads all of them.
+ */
+const HISTORY_KEYS = [BEST_KEY, PROFILE_KEY, DAILY_KEY, CAMPAIGN_PROGRESS_KEY, DIFFICULTY_KEY, ARENA_KEY, MODE_KEY]
 
 export default function Page() {
   const [screen, setScreen] = useState<Screen>("menu")
@@ -165,23 +182,30 @@ export default function Page() {
     }
   }, [])
 
-  // Restore persisted mute and detect a touch-first device.
-  useEffect(() => {
+  // Restore the stored menu choices before the first paint, so a returning player never sees the
+  // first-run menu flash past. `hasHistory` is why a missing `gw:difficulty` alone does not make a
+  // veteran a newcomer.
+  useIsoLayoutEffect(() => {
     try {
-      if (window.localStorage.getItem(MUTE_KEY) === "1") setMuted(true)
-      // Only a stored choice moves the menu off its first-run defaults; the first render already
-      // matches them, so hydration sees the same markup the server sent.
+      const s = window.localStorage
+      if (s.getItem(MUTE_KEY) === "1") setMuted(true)
+      const has = (key: string) => s.getItem(key) !== null
       const start = startDefaults({
-        difficulty: window.localStorage.getItem(DIFFICULTY_KEY),
-        arena: window.localStorage.getItem(ARENA_KEY),
+        difficulty: s.getItem(DIFFICULTY_KEY),
+        arena: s.getItem(ARENA_KEY),
+        hasHistory: HISTORY_KEYS.some(has),
       })
       setDifficulty(start.difficulty)
       setArena(start.arena)
-      const m = window.localStorage.getItem(MODE_KEY)
+      const m = s.getItem(MODE_KEY)
       if (m === "round" || m === "endless" || m === "campaign" || m === "daily") setMode(m)
     } catch {
       // Storage blocked: stay unmuted, on the first-run defaults.
     }
+  }, [])
+
+  // Restore the saved record and detect a touch-first device.
+  useEffect(() => {
     let stored: Storage | null = null
     try {
       stored = window.localStorage
@@ -355,6 +379,14 @@ export default function Page() {
 
   // The menu's Play button: whichever mode is selected.
   const play = useCallback(() => {
+    // Pressing Play is the explicit choice: store the pair the menu resolved to, so the next visit
+    // opens on it even if the player never tapped the segmented controls. No click sound here.
+    try {
+      window.localStorage.setItem(DIFFICULTY_KEY, state.current.difficulty)
+      window.localStorage.setItem(ARENA_KEY, state.current.arena)
+    } catch {
+      // Not persisted; the choice still applies for this session.
+    }
     const m = state.current.mode
     if (m === "campaign") {
       playLevel(state.current.campaignLevel)
@@ -683,7 +715,9 @@ export default function Page() {
         <ProfilePanel profile={profileRef.current} onClose={() => setShowProfile(false)} />
       )}
       {screen !== "menu" && <Toasts items={toasts} layout={layout} />}
-      {screen === "paused" && <PauseScreen onResume={resume} onRestart={playAgain} onQuit={toMenu} />}
+      {screen === "paused" && (
+        <PauseScreen layout={layout} onResume={resume} onRestart={playAgain} onQuit={toMenu} />
+      )}
       {screen === "over" && outcome && (
         <EndScreen
           result={outcome.result}

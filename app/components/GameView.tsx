@@ -30,7 +30,8 @@ import { createInput, type InputController } from "@/game/input"
 import { createRenderer, type RenderFrame, type RenderView } from "@/game/render"
 import type { Sfx } from "@/game/audio"
 import { deathLine } from "./Screens"
-import { respawnTip, ultHintDue } from "./hudView"
+import { firstDeathTip, ultHintDue, ultHintNotice } from "./hudView"
+import { roundCriticalMass } from "@/app/roundSetup"
 import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, Intent, RoundResult, World } from "@/game/types"
 import { TouchControls } from "./TouchControls"
 
@@ -166,13 +167,9 @@ export function GameView(props: GameViewProps) {
       arena: pickArena(),
       mode,
       botCount: level ? level.bots : undefined,
-      // Only the "reach critical mass" level keeps the engine's race; other campaign levels run on
-      // their own goal and clock. Round mode uses the goal tuned for the chosen starting skill.
-      criticalMass: level
-        ? level.goal.kind !== "criticalMass"
-          ? 1e9
-          : undefined
-        : CONFIG.round.criticalMassByDifficulty[difficulty],
+      // The mass race is on for Round, Endless and the critical-mass level; a campaign level with
+      // its own goal turns it off. See app/roundSetup.ts.
+      criticalMass: roundCriticalMass(level),
     })
     let goalReached = false
     // Unready-Singularity feedback: the last time one was announced, and the minimum gap between
@@ -525,11 +522,7 @@ export function GameView(props: GameViewProps) {
             // immediate feedback, the rate limit keeps a mash from stacking toasts.
             if (ultHintDue(raw.ult === true, player.ult, now, lastUltHint) && !demo) {
               lastUltHint = now
-              notify({
-                kicker: "Singularity",
-                name: `${Math.round(player.ult * 100)}% charged`,
-                description: "Absorb mass to fill the charge. Ready at 100%.",
-              })
+              notify(ultHintNotice(player.ult))
             }
             intents.set("player", raw)
           }
@@ -635,7 +628,7 @@ export function GameView(props: GameViewProps) {
             } else if (ev.type === "death" && ev.bodyId === "player" && world.mode === "endless") {
               // The tip rides along with the first death only: the overlay already appears every
               // respawn, and a teaching line that repeats on every death becomes noise.
-              const tip = deathsSeen === 0 ? respawnTip(ev.cause) : ""
+              const tip = firstDeathTip(deathsSeen, ev.cause)
               deathsSeen++
               propsRef.current.onDeath?.(deathText(world, ev.cause), tip)
               forceHud = true

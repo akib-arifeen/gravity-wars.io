@@ -11,7 +11,8 @@ export type HudMode = "endless" | "round" | "campaign"
 /**
  * The one plain-language sentence that teaches the gravity-assist burn. The menu, the countdown,
  * the pause help and the respawn tip all use these exact words, so a newcomer meets one phrase.
- * The technical name ("prograde burn window open") stays on the dash control for assistive tech.
+ * The technical name ("prograde burn window open") rides along on the dash control for assistive
+ * tech, after the same words the screen shows.
  */
 export const BURN_TIP = "Fly close past a star, then DASH ALONG PATH for a speed boost."
 
@@ -34,10 +35,15 @@ export function respawnTip(cause: DeathCause): string {
   }
 }
 
-/** The live speed readout: whole u/s, plus the surge multiplier while a burn is paying off. */
+/**
+ * The live speed readout. `speed` is the body's absolute speed in world units, not its speed
+ * relative to a well, so the label says SPEED and nothing more. `surgeMul` is the temporary
+ * speed-ceiling multiplier from the burn, not a measured ratio of anything, so it is shown as
+ * "×1.24 cap" only while a surge is running.
+ */
 export function speedLine(speed: number, surge: number, surgeMul: number): string {
-  const base = `${Math.max(0, Math.round(speed))} u/s`
-  return surge > 0 && surgeMul > 1 ? `${base} · ×${surgeMul.toFixed(2)}` : base
+  const base = `SPEED ${Math.max(0, Math.round(speed))} u/s`
+  return surge > 0 && surgeMul > 1 ? `${base} · ×${surgeMul.toFixed(2)} cap` : base
 }
 
 /** The quiet gap between two unready-Singularity answers (ms). */
@@ -90,9 +96,27 @@ export function dismissesLeaderboard(key: string, open: boolean): boolean {
  * The dash control's accessible name. A payable burn window is announced here and nowhere else:
  * the name changes while the window is open (and back when it closes) without a live region
  * speaking a 0.35 s window late, twice, or over the boss line, and without touching the boss text.
+ * It repeats the on-screen phrase first ("DASH ALONG PATH") and only then the technical name.
  */
 export function dashName(base: string, burnReady: boolean): string {
-  return burnReady ? `${base}, prograde burn window open` : base
+  return burnReady ? `${base}, DASH ALONG PATH (prograde burn window open)` : base
+}
+
+/**
+ * The answer to an unready Singularity press: what is missing and how to fill it. Pure so the
+ * shell keeps no copy of its own, and the charge is always read from the live value.
+ */
+export function ultHintNotice(ult: number): { kicker: string; name: string; description: string } {
+  return {
+    kicker: "Singularity",
+    name: `${Math.round(ult * 100)}% charged`,
+    description: "Absorb mass to fill the charge. Ready at 100%.",
+  }
+}
+
+/** The tip the respawn overlay shows: the teaching line on the round's first death, then nothing. */
+export function firstDeathTip(deathsSeen: number, cause: DeathCause): string {
+  return deathsSeen === 0 ? respawnTip(cause) : ""
 }
 
 export interface CentreHud {

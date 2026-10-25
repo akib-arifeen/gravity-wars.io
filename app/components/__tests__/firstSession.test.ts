@@ -1,11 +1,13 @@
-// The first-session increment: forgiving first-run defaults, copy that matches the engine
-// (2:30 and the tuned goal), the plain-language burn prompt, the live speed readout and the single
-// respawn tip. Everything here is pure or server-rendered, so no DOM is needed.
+// The first-session increment: history-aware defaults, copy that matches the engine's clocks and
+// goal, the plain-language burn prompt, the live speed readout and the single respawn tip.
+// Everything here is pure or server-rendered, so no DOM is needed.
 
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it } from "vitest"
+import { CAMPAIGN_LEVELS, emptyProgress } from "@/game/campaign"
 import { CONFIG } from "@/game/config"
+import { dailyChallenge, type DailyConfig } from "@/game/daily"
 import { createWorld, hudSnapshot } from "@/game/engine"
 import type { FeedView } from "@/game/feed"
 import type { DeathCause } from "@/game/types"
@@ -13,58 +15,97 @@ import { burnPromptLabel } from "@/game/render"
 import { startDefaults } from "@/app/startDefaults"
 import { Hud } from "../Hud"
 import { BURN_TIP, respawnTip } from "../hudView"
-import { MODES, PauseScreen, ROUND_LENGTH, roundGoal } from "../Screens"
+import { ARENA_CHOICES, MenuScreen, MODES, PauseScreen, roundLengthText, type MenuMode } from "../Screens"
 
 const noop = () => {}
 
-function roundCopy(difficulty: "easy" | "normal" | "hard"): string {
-  return MODES.find((m) => m.id === "round")!.copy(difficulty)
-}
+const roundCtx = (arena: "classic" | "vast" | "random") => ({ difficulty: "easy" as const, arena, dailyArena: null })
+const copy = (id: MenuMode, arena: "classic" | "vast" | "random" = "classic") => MODES.find((m) => m.id === id)!.copy(roundCtx(arena))
 
 describe("first-run defaults", () => {
-  it("starts a first run on Easy in the Classic arena", () => {
+  it("starts a genuinely new player on Easy in the Classic arena", () => {
     expect(startDefaults({})).toEqual({ difficulty: "easy", arena: "classic" })
-    expect(startDefaults({ difficulty: null, arena: null })).toEqual({ difficulty: "easy", arena: "classic" })
+    expect(startDefaults({ difficulty: null, arena: null, hasHistory: false })).toEqual({
+      difficulty: "easy",
+      arena: "classic",
+    })
   })
 
-  it("never overrides a returning player's own choices", () => {
-    for (const difficulty of ["easy", "normal", "hard"] as const) {
-      expect(startDefaults({ difficulty, arena: "binary" })).toEqual({ difficulty, arena: "binary" })
+  it("does not treat a missing gw:difficulty as a newcomer: history alone means returning", () => {
+    // A player who has played has a best score and a profile, whether or not an older build ever
+    // stored a skill. They keep a real skill and an arena that is not pinned to the first-run one.
+    expect(startDefaults({ hasHistory: true })).toEqual({ difficulty: "normal", arena: "random" })
+    expect(startDefaults({ difficulty: null, hasHistory: true }).difficulty).toBe("normal")
+  })
+
+  it("never overrides a stored choice, history or no history", () => {
+    for (const hasHistory of [false, true]) {
+      for (const difficulty of ["easy", "normal", "hard"] as const) {
+        expect(startDefaults({ difficulty, arena: "binary", hasHistory })).toEqual({ difficulty, arena: "binary" })
+      }
+      // "random" is a real choice, not a missing one.
+      expect(startDefaults({ arena: "random", hasHistory }).arena).toBe("random")
+      expect(startDefaults({ arena: "vast", hasHistory }).arena).toBe("vast")
     }
-    // "random" is a real choice, not a missing one.
-    expect(startDefaults({ arena: "random" }).arena).toBe("random")
-    expect(startDefaults({ arena: "vast" }).arena).toBe("vast")
   })
 
-  it("falls back to the forgiving pair when a stored value is unreadable", () => {
+  it("treats an unreadable stored value as absent, not as a choice", () => {
     expect(startDefaults({ difficulty: "nightmare", arena: "lava" })).toEqual({ difficulty: "easy", arena: "classic" })
+    expect(startDefaults({ difficulty: "nightmare", arena: "lava", hasHistory: true })).toEqual({
+      difficulty: "normal",
+      arena: "random",
+    })
   })
 })
 
 describe("match copy matches the engine", () => {
-  it("states the real 2:30 length and the goal for the chosen skill", () => {
-    expect(ROUND_LENGTH).toBe("2:30")
+  it("states each arena's real clock from the config", () => {
     expect(CONFIG.round.duration).toBe(150)
-    expect(roundCopy("easy")).toContain("2:30")
-    expect(roundCopy("easy")).toContain(`${roundGoal("easy")} mass`)
-    expect(roundCopy("normal")).toContain(`${roundGoal("normal")} mass`)
-    expect(roundCopy("hard")).toContain(`${roundGoal("hard")} mass`)
+    expect(roundLengthText("classic")).toBe("2:30")
+    expect(roundLengthText("vast")).toBe("3:30")
+    // The Vast runs 1.4x as long; the copy follows the config, not a hard-coded number.
+    expect(CONFIG.round.duration * CONFIG.vast.roundMul).toBe(CONFIG.vast.roundMul * 150)
+    expect(roundLengthText("vast")).toBe(
+      `${Math.floor((CONFIG.round.duration * CONFIG.vast.roundMul) / 60)}:${String(Math.round((CONFIG.round.duration * CONFIG.vast.roundMul) % 60)).padStart(2, "0")}`,
+    )
+  })
+
+  it("names both possible clocks for Random instead of guessing the arena", () => {
+    expect(roundLengthText("random")).toBe("2:30, or 3:30 in The Vast")
+    expect(copy("round", "random")).toContain("2:30, or 3:30 in The Vast")
+    expect(ARENA_CHOICES).toContain("random")
+  })
+
+  it("never puts a universal 2:30 on a Vast round", () => {
+    const vast = copy("round", "vast")
+    expect(vast).toContain("3:30")
+    expect(vast).not.toContain("2:30")
+  })
+
+  it("states the one goal, the same on every starting skill", () => {
+    for (const d of ["easy", "normal", "hard"] as const) {
+      expect(MODES.find((m) => m.id === "round")!.copy({ difficulty: d, arena: "classic", dailyArena: null })).toContain(
+        `${CONFIG.round.criticalMass} mass`,
+      )
+    }
+    expect(CONFIG.round.criticalMass).toBe(130)
+  })
+
+  it("states the daily arena's clock once the day is known", () => {
+    const config: DailyConfig = { ...dailyChallenge(new Date("2026-03-04T00:00:00Z")), arena: "vast" }
+    const known = MODES.find((m) => m.id === "daily")!.copy({ difficulty: "normal", arena: "classic", dailyArena: config.arena })
+    expect(known).toContain("3:30")
+    // Before the client resolves the day, the line must not invent a clock.
+    expect(copy("daily")).not.toMatch(/\d:\d\d/)
   })
 
   it("never claims a three-minute match anywhere in the menu copy", () => {
     for (const m of MODES) {
-      for (const d of ["easy", "normal", "hard"] as const) {
-        expect(m.copy(d).toLowerCase()).not.toContain("3 minute")
-        expect(m.copy(d).toLowerCase()).not.toContain("three minute")
+      for (const arena of ["classic", "vast", "random"] as const) {
+        expect(m.copy(roundCtx(arena)).toLowerCase()).not.toContain("3 minute")
+        expect(m.copy(roundCtx(arena)).toLowerCase()).not.toContain("three minute")
       }
     }
-  })
-
-  it("tunes only Easy: Normal and Hard keep the old goal", () => {
-    expect(roundGoal("easy")).toBe(90)
-    expect(roundGoal("normal")).toBe(CONFIG.round.criticalMass)
-    expect(roundGoal("hard")).toBe(CONFIG.round.criticalMass)
-    expect(roundGoal("easy")).toBeLessThan(roundGoal("normal"))
   })
 
   it("teaches the burn in plain language, not 'prograde'", () => {
@@ -76,19 +117,74 @@ describe("match copy matches the engine", () => {
   })
 })
 
+const DESKTOP_CONTROLS =
+  "WASD or hold the mouse to thrust · Space or right-click to pull · Shift = DASH ALONG PATH · E repulse · Q Singularity · Esc pauses"
+const TOUCH_CONTROLS = "Drag on the left to steer · hold PULL · tap the glowing DASH, REPULSE and ULT"
+
+function menu(mode: MenuMode, arena: "classic" | "vast" | "random", layout: "desktop" | "touch") {
+  return createElement(MenuScreen, {
+    difficulty: "normal" as const,
+    onDifficulty: noop,
+    onPlay: noop,
+    muted: false,
+    onToggleMute: noop,
+    layout,
+    arena,
+    onArena: noop,
+    onStats: noop,
+    mode,
+    onMode: noop,
+    endlessBest: 0,
+    campaignLevel: CAMPAIGN_LEVELS[0],
+    onCampaignLevel: noop,
+    campaignProgress: emptyProgress(),
+    daily: null,
+  })
+}
+
+describe("what the rendered menu says", () => {
+  it("uses the selected arena's clock and the configured goal in the Round panel", () => {
+    const vast = renderToStaticMarkup(menu("round", "vast", "desktop"))
+    expect(vast).toContain("3:30 match")
+    expect(vast).toContain(`Reach ${CONFIG.round.criticalMass} mass`)
+    expect(vast).not.toContain("2:30 match")
+
+    const random = renderToStaticMarkup(menu("round", "random", "desktop"))
+    expect(random).toContain("2:30, or 3:30 in The Vast")
+  })
+
+  it("gives the daily panel a real clock only from what it knows", () => {
+    const today = renderToStaticMarkup(menu("daily", "classic", "desktop"))
+    // No daily config yet: the how-line states both possible lengths rather than one guess.
+    expect(today).toContain("One round, 2:30 (3:30 in The Vast)")
+  })
+})
+
 describe("pause help", () => {
   it("re-reads the controls and the burn instruction without a pointer query in the markup", () => {
     const markup = renderToStaticMarkup(
-      createElement(PauseScreen, { onResume: noop, onRestart: noop, onQuit: noop }),
+      createElement(PauseScreen, { onResume: noop, onRestart: noop, onQuit: noop, layout: "desktop" as const }),
     )
     expect(markup).toContain(BURN_TIP)
-    expect(markup).toContain("WASD or hold the mouse to thrust")
-    expect(markup).toContain("Drag on the left to steer")
+    expect(markup).toContain(DESKTOP_CONTROLS)
+    expect(markup).toContain(TOUCH_CONTROLS)
     expect(markup).toContain("Resume")
     expect(markup).toContain("Restart")
     expect(markup).toContain("Quit to menu")
     // Both lines ship and CSS picks one, so the server never guesses the pointer.
     expect(markup).not.toContain("(pointer: coarse)")
+    expect(markup).not.toContain('data-touch="1"')
+  })
+
+  it("marks a touch device from the same layout source the menu uses", () => {
+    const paused = renderToStaticMarkup(
+      createElement(PauseScreen, { onResume: noop, onRestart: noop, onQuit: noop, layout: "touch" as const }),
+    )
+    expect(paused).toContain('data-touch="1"')
+    // A hybrid device that has touched the screen sees the touch line on both screens.
+    expect(renderToStaticMarkup(menu("round", "classic", "touch"))).toContain('data-touch="1"')
+    expect(paused).toContain(TOUCH_CONTROLS)
+    expect(paused).toContain(BURN_TIP)
   })
 })
 
@@ -119,14 +215,14 @@ describe("HUD labels and readouts", () => {
     expect(markup).not.toContain(">SCORE<")
   })
 
-  it("shows the live speed and names a surge multiplier while one is paying", () => {
+  it("shows the live speed and names a surge ceiling while one is paying", () => {
     const snap: FeedView = { ...endlessHud(), phase: "playing" }
     const still = hudMarkup({ ...snap, speed: 342.4, assist: { ...snap.assist, surge: 0, surgeMul: 1 } })
-    expect(still).toContain("342 u/s")
+    expect(still).toContain("SPEED 342 u/s")
     expect(still).not.toContain("×1.24")
 
     const surging = hudMarkup({ ...snap, speed: 342.4, assist: { ...snap.assist, surge: 2.1, surgeMul: 1.24 } })
-    expect(surging).toContain("342 u/s · ×1.24")
+    expect(surging).toContain("SPEED 342 u/s · ×1.24 cap")
   })
 
   it("hides the readout during the countdown, when nothing is moving yet", () => {

@@ -24,7 +24,7 @@ import { AbilityIcon, LockIcon, StarIcon } from "./Icons"
 import { BURN_TIP } from "./hudView"
 import { radioTabStop, radioTarget } from "./radioNav"
 
-const BEST_KEY = "gw:best:v1"
+export const BEST_KEY = "gw:best:v1"
 
 /**
  * Move focus and selection in a role="radio" group with the APG arrow/Home/End keys. Disabled
@@ -55,24 +55,51 @@ export const DIFFICULTIES: { id: Difficulty; label: string; sub: string; endless
 /** The mode the menu offers: the two engine modes plus the campaign and the daily challenge. */
 export type MenuMode = GameMode | "campaign" | "daily"
 
-/** The Round goal for the selected starting skill (CONFIG.round.criticalMassByDifficulty). */
-export function roundGoal(difficulty: Difficulty): number {
-  return CONFIG.round.criticalMassByDifficulty[difficulty]
+/** The engine's Round clock for one arena, in seconds (the Vast runs 1.4x as long). */
+export function roundSeconds(arena: ArenaId): number {
+  return CONFIG.round.duration * (arena === "vast" ? CONFIG.vast.roundMul : 1)
 }
 
-/** The round clock as the menu states it, from the engine's own duration. */
-export const ROUND_LENGTH = `${Math.floor(CONFIG.round.duration / 60)}:${String(CONFIG.round.duration % 60).padStart(2, "0")}`
+/** Whole seconds as m:ss. */
+export function clockText(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
+}
 
-/** The one-line teaching each mode shows under its tab. Round names the goal for the chosen skill. */
-export const MODES: { id: MenuMode; label: string; copy: (difficulty: Difficulty) => string }[] = [
+/**
+ * The Round clock as the menu states it. Random is a real choice, and the two possible lengths
+ * differ, so the copy names both instead of guessing which arena the engine will pick.
+ */
+export function roundLengthText(arena: ArenaChoice): string {
+  if (arena === "random") return `${clockText(roundSeconds("classic"))}, or ${clockText(roundSeconds("vast"))} in The Vast`
+  return clockText(roundSeconds(arena))
+}
+
+/** Everything the mode copy needs: the selected skill, arena, and today's daily arena. */
+export interface ModeCopyContext {
+  difficulty: Difficulty
+  arena: ArenaChoice
+  /** Today's daily arena, or null before the client has resolved it. */
+  dailyArena: ArenaId | null
+}
+
+/** The one-line teaching each mode shows under its tab. */
+export const MODES: { id: MenuMode; label: string; copy: (ctx: ModeCopyContext) => string }[] = [
   { id: "endless", label: "Endless", copy: () => "Endless \u2014 the arena never sleeps. Climb the leaderboard." },
   {
     id: "round",
     label: "Round",
-    copy: (d) => `${ROUND_LENGTH} match. Reach ${roundGoal(d)} mass or be the last one left.`,
+    copy: ({ arena }) =>
+      `${roundLengthText(arena)} match. Reach ${CONFIG.round.criticalMass} mass or be the last one left.`,
   },
   { id: "campaign", label: "Campaign", copy: () => "The Long Fall \u2014 twelve levels down three sectors, three bosses, one way out." },
-  { id: "daily", label: "Daily", copy: () => "One seeded arena for everyone, today only. Your score is the peak mass of a single run." },
+  {
+    id: "daily",
+    label: "Daily",
+    copy: ({ dailyArena }) =>
+      dailyArena
+        ? `One seeded arena for everyone, today only: ${roundLengthText(dailyArena)}. Your score is the peak mass of a single run.`
+        : "One seeded arena for everyone, today only. Your score is the peak mass of a single run.",
+  },
 ]
 
 /** Everything the daily panel needs about today and the player's record. */
@@ -333,7 +360,9 @@ export function MenuScreen({
             </button>
           ))}
         </div>
-        <p className="gw-mode-copy">{MODES.find((m) => m.id === mode)?.copy(difficulty)}</p>
+        <p className="gw-mode-copy">
+          {MODES.find((m) => m.id === mode)?.copy({ difficulty, arena, dailyArena: daily?.config.arena ?? null })}
+        </p>
 
         {mode === "campaign" ? (
           <>
@@ -501,13 +530,16 @@ export function MenuScreen({
           ) : mode === "daily" ? (
             <>
               <li>Everyone gets the same seeded arena, rivals and cosmic events today.</li>
-              <li>One round, {ROUND_LENGTH}. Your score is your peak mass.</li>
+              <li>
+                One round, {roundLengthText(daily?.config.arena ?? "classic")}
+                {daily ? "" : " (3:30 in The Vast)"}. Your score is your peak mass.
+              </li>
               <li>Come back tomorrow for a new arena and seed.</li>
             </>
           ) : (
             <>
               <li>{BURN_TIP}</li>
-              <li>Reach {roundGoal(difficulty)} mass or be the last one left.</li>
+              <li>Reach {CONFIG.round.criticalMass} mass or be the last one left.</li>
               <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
             </>
           )}
@@ -553,9 +585,11 @@ interface PauseProps {
   onResume(): void
   onRestart(): void
   onQuit(): void
+  /** The same pointer source the menu uses, so the help lines match on a hybrid device. */
+  layout: "desktop" | "touch"
 }
 
-export function PauseScreen({ onResume, onRestart, onQuit }: PauseProps) {
+export function PauseScreen({ onResume, onRestart, onQuit, layout }: PauseProps) {
   const ref = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     ref.current?.focus({ preventScroll: true })
@@ -583,7 +617,7 @@ export function PauseScreen({ onResume, onRestart, onQuit }: PauseProps) {
             menu, and the reason the server's markup never depends on matchMedia. */}
         <div className="gw-pause-help">
           <p className="gw-pause-tip">{BURN_TIP}</p>
-          <p className="gw-controls">
+          <p className="gw-controls" data-touch={layout === "touch" ? "1" : undefined}>
             <span className="gw-controls-line" data-for="desktop">
               {DESKTOP_CONTROLS}
             </span>
