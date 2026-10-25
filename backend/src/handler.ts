@@ -12,18 +12,21 @@ import {
   ensureLeague,
   getLeaderboard,
   getIdempotency,
+  getLatestLeagueForDate,
+  getLeagueById,
   getRun,
   getSubmissionByRun,
   insertIdempotency,
   insertRun,
   insertSubmissionIfOpen,
   rankBefore,
+  type IdempotencyRow,
   type SubmissionRow,
 } from "./db.ts"
 import { HttpError, errorResponse, json, readJsonBody, structuredError, structuredLog } from "./http.ts"
 import { RATE_RULES, rateHeaders, takeRateLimit } from "./rate.ts"
 import { ReplayError, replayDailyRun, type ReplayOutcome } from "./replay.ts"
-import { parseIssueInput, parseSubmissionInput, type SubmissionInput } from "./validate.ts"
+import { decodeSubmissionTrace, parseIssueInput, parseSubmissionBinding, type SubmissionBinding } from "./validate.ts"
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000
 const LEADERBOARD_HISTORY_DAYS = 31
@@ -156,14 +159,7 @@ async function submitRun(
       if (prior.request_hash !== requestHash) {
         throw new HttpError(409, "IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used with a different body")
       }
-      return new Response(prior.response_json, {
-        status: prior.status,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "no-store",
-          "idempotent-replay": "true",
-        },
-      })
+      return storedResponse(prior)
     }
     await deleteIdempotency(env.DB, keyHash)
   }
@@ -171,14 +167,24 @@ async function submitRun(
   const minute = await takeRateLimit(env.DB, RATE_RULES.submitMinute, actorHash, now)
   await takeRateLimit(env.DB, RATE_RULES.submitDay, actorHash, now)
 
-  const input = parseSubmissionInput(value)
+  // Cheap shape and binding checks first; the trace is decoded only after the run, actor,
+  // ruleset, assisted flag and nonce/token have all been accepted.
+  const input = parseSubmissionBinding(value)
   const run = await getRun(env.DB, runId)
   if (!run) throw new HttpError(404, "RUN_NOT_FOUND", "Unknown run")
   if (run.actorHash !== actorHash) throw new HttpError(403, "INVALID_BINDING", "Run does not belong to this client")
   if (now > run.expiresAt) throw new HttpError(410, "RUN_EXPIRED", "Run descriptor has expired")
-  if (input.rulesetVersion !== DAILY_RULESET_VERSION) {
-    throw new HttpError(409, "RULESET_MISMATCH", "Run was issued under another ruleset", {
-      details: { run: DAILY_RULESET_VERSION, submitted: input.rulesetVersion },
+
+  const league = await getLeagueById(env.DB, run.leagueId)
+  if (!league) throw new HttpError(500, "INTERNAL_ERROR", "Stored run has no league")
+  if (league.rulesetVersion !== DAILY_RULESET_VERSION) {
+    throw new HttpError(409, "RULESET_MISMATCH", "Run was issued under a previous ruleset", {
+      details: { run: league.rulesetVersion, current: DAILY_RULESET_VERSION },
+    })
+  }
+  if (input.rulesetVersion !== league.rulesetVersion) {
+    throw new HttpError(409, "RULESET_MISMATCH", "Submitted ruleset does not match the run", {
+      details: { run: league.rulesetVersion, submitted: input.rulesetVersion },
     })
   }
   if (run.assisted !== input.assisted) {
@@ -192,9 +198,12 @@ async function submitRun(
 
   const traceHash = await sha256Hex(input.traceData)
   const existing = await getSubmissionByRun(env.DB, runId)
-  if (existing) return replayExisting(env.DB, existing, traceHash, requestHash, keyHash, actorHash, now)
+  if (existing) {
+    return replayExisting(env.DB, existing, league, traceHash, requestHash, keyHash, actorHash, now)
+  }
 
-  const outcome = replayOrThrow(run, input.trace.steps)
+  const trace = decodeSubmissionTrace(input)
+  const outcome = replayOrThrow(league, trace.steps)
   const tolerance = Math.max(1, Math.round(outcome.score * 0.002))
   if (Math.abs(input.claimedScore - outcome.score) > tolerance) {
     structuredLog("submission_mismatch", {
@@ -212,16 +221,17 @@ async function submitRun(
   const submissionId = crypto.randomUUID()
   const ranked = run.ranked && !input.assisted
   const rank = ranked ? await rankBefore(env.DB, run.leagueId, outcome.score, now, submissionId) : null
-  const row = submissionRow(run, input, outcome, submissionId, traceHash, now, ranked)
+  const row = submissionRow(run, input, trace.steps.length, outcome, submissionId, traceHash, now, ranked)
   const inserted = await insertSubmissionIfOpen(env.DB, row, now)
   if (!inserted) {
     const raced = await getSubmissionByRun(env.DB, runId)
-    if (raced) return replayExisting(env.DB, raced, traceHash, requestHash, keyHash, actorHash, now)
+    if (raced) return replayExisting(env.DB, raced, league, traceHash, requestHash, keyHash, actorHash, now)
     throw new HttpError(409, "RUN_ALREADY_SUBMITTED", "Run was already submitted")
   }
 
-  const body = submissionBody(row, run.leagueId, rank)
-  await rememberIdempotency(env.DB, keyHash, requestHash, 201, JSON.stringify(body), actorHash, now)
+  const body = submissionBody(row, league, rank)
+  const stored = await rememberIdempotency(env.DB, keyHash, requestHash, 201, JSON.stringify(body), actorHash, now)
+  if (stored) return storedResponse(stored)
   structuredLog("submission_verified", {
     requestId,
     runId,
@@ -229,7 +239,7 @@ async function submitRun(
     leagueId: run.leagueId,
     score: outcome.score,
     claimed: input.claimedScore,
-    steps: input.trace.steps.length,
+    steps: trace.steps.length,
     replayMs: outcome.replayMs,
     ranked,
   })
@@ -237,9 +247,6 @@ async function submitRun(
 }
 
 async function leaderboard(request: Request, env: Env, url: URL, now: number): Promise<Response> {
-  const actorHash = await actorKey(env, request)
-  const hit = await takeRateLimit(env.DB, RATE_RULES.readMinute, actorHash, now)
-
   const today = dateKey(new Date(now))
   const requested = url.searchParams.get("date") ?? today
   const requestedDay = dayNumber(requested)
@@ -263,13 +270,18 @@ async function leaderboard(request: Request, env: Env, url: URL, now: number): P
     throw new HttpError(422, "INVALID_REQUEST", "limit must be an integer in [1, 50]")
   }
 
-  const leagueId = `daily:${requested}:v${DAILY_RULESET_VERSION}`
-  const rows = await getLeaderboard(env.DB, leagueId, limit)
+  // Validation is complete before the first D1 write, so an invalid read cannot consume quota.
+  const actorHash = await actorKey(env, request)
+  const hit = await takeRateLimit(env.DB, RATE_RULES.readMinute, actorHash, now)
+
+  // Resolve the stored league for the date, so history stays readable after a ruleset bump.
+  const league = await getLatestLeagueForDate(env.DB, requested)
+  const rows = league ? await getLeaderboard(env.DB, league.id, limit) : []
   return json(
     {
       date: requested,
-      leagueId,
-      rulesetVersion: DAILY_RULESET_VERSION,
+      leagueId: league?.id ?? null,
+      rulesetVersion: league?.rulesetVersion ?? null,
       entries: rows.map((row, index) => ({
         rank: index + 1,
         score: Number(row.score),
@@ -283,9 +295,9 @@ async function leaderboard(request: Request, env: Env, url: URL, now: number): P
   )
 }
 
-function replayOrThrow(run: RunRow, steps: Parameters<typeof replayDailyRun>[1]): ReplayOutcome {
+function replayOrThrow(league: League, steps: Parameters<typeof replayDailyRun>[1]): ReplayOutcome {
   try {
-    return replayDailyRun(leagueFromId(run.leagueId), steps)
+    return replayDailyRun(league, steps)
   } catch (error) {
     if (error instanceof ReplayError) throw new HttpError(422, error.code, error.message)
     throw error
@@ -294,7 +306,8 @@ function replayOrThrow(run: RunRow, steps: Parameters<typeof replayDailyRun>[1])
 
 function submissionRow(
   run: RunRow,
-  input: SubmissionInput,
+  input: SubmissionBinding,
+  traceSteps: number,
   outcome: ReplayOutcome,
   id: string,
   traceHash: string,
@@ -309,7 +322,7 @@ function submissionRow(
     score: outcome.score,
     claimed_score: input.claimedScore,
     trace_hash: traceHash,
-    trace_steps: input.trace.steps.length,
+    trace_steps: traceSteps,
     assisted: input.assisted ? 1 : 0,
     ranked: ranked ? 1 : 0,
     verified: 1,
@@ -319,13 +332,13 @@ function submissionRow(
   }
 }
 
-function submissionBody(row: SubmissionRow, leagueId: string, rank: number | null): Record<string, unknown> {
+function submissionBody(row: SubmissionRow, league: League, rank: number | null): Record<string, unknown> {
   return {
     submissionId: row.id,
     runId: row.run_id,
-    leagueId,
-    date: dateFromLeagueId(leagueId),
-    rulesetVersion: DAILY_RULESET_VERSION,
+    leagueId: league.id,
+    date: league.date,
+    rulesetVersion: league.rulesetVersion,
     assisted: row.assisted === 1,
     ranked: row.ranked === 1,
     verified: row.verified === 1,
@@ -342,6 +355,7 @@ function submissionBody(row: SubmissionRow, leagueId: string, rank: number | nul
 async function replayExisting(
   db: D1Database,
   existing: SubmissionRow,
+  league: League,
   traceHash: string,
   requestHash: string,
   keyHash: string,
@@ -357,11 +371,17 @@ async function replayExisting(
     existing.ranked === 1
       ? await rankBefore(db, existing.league_id, existing.score, existing.submitted_at, existing.id)
       : null
-  const body = submissionBody(existing, existing.league_id, rank)
-  await rememberIdempotency(db, keyHash, requestHash, 200, JSON.stringify(body), actorHash, now)
+  const body = submissionBody(existing, league, rank)
+  const stored = await rememberIdempotency(db, keyHash, requestHash, 200, JSON.stringify(body), actorHash, now)
+  if (stored) return storedResponse(stored)
   return json(body, 200, { "idempotent-replay": "true" })
 }
 
+/**
+ * Store this response for the key. Returns the row another request already stored when this
+ * request loses the race: a concurrent honest retry of the same body must replay the stored
+ * response even if the leaderboard rank moved between the two submissions.
+ */
 async function rememberIdempotency(
   db: D1Database,
   keyHash: string,
@@ -370,7 +390,7 @@ async function rememberIdempotency(
   body: string,
   actorHash: string,
   now: number,
-): Promise<void> {
+): Promise<IdempotencyRow | null> {
   const inserted = await insertIdempotency(db, {
     key_hash: keyHash,
     actor_hash: actorHash,
@@ -380,10 +400,24 @@ async function rememberIdempotency(
     created_at: now,
     expires_at: now + IDEMPOTENCY_TTL_MS,
   })
-  if (inserted) return
+  if (inserted) return null
   const prior = await getIdempotency(db, keyHash)
-  if (prior && prior.request_hash === requestHash && prior.response_json === body) return
-  throw new HttpError(409, "IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used with a different body")
+  if (!prior) throw new HttpError(500, "INTERNAL_ERROR", "Idempotency record could not be read after a conflict")
+  if (prior.request_hash !== requestHash) {
+    throw new HttpError(409, "IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used with a different body")
+  }
+  return prior
+}
+
+function storedResponse(prior: IdempotencyRow): Response {
+  return new Response(prior.response_json, {
+    status: prior.status,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "idempotent-replay": "true",
+    },
+  })
 }
 
 async function actorKey(env: Env, request: Request): Promise<string> {
@@ -398,19 +432,4 @@ function requireMethod(request: Request, allowed: string[]): void {
   if (!allowed.includes(request.method)) {
     throw new HttpError(405, "METHOD_NOT_ALLOWED", `Allowed: ${allowed.join(", ")}`, { allow: allowed.join(", ") })
   }
-}
-
-function leagueFromId(leagueId: string): League {
-  const match = /^daily:(\d{4}-\d{2}-\d{2}):v(\d+)$/.exec(leagueId)
-  if (!match) throw new HttpError(500, "INTERNAL_ERROR", "Stored league id is malformed")
-  const date = match[1]
-  // The stored id is authoritative; seed/arena/difficulty come from the deterministic daily config.
-  const league = leagueFor(new Date(`${date}T12:00:00Z`))
-  if (league.id !== leagueId) throw new HttpError(500, "INTERNAL_ERROR", "Stored league id does not match its ruleset")
-  return league
-}
-
-function dateFromLeagueId(leagueId: string): string {
-  const match = /^daily:(\d{4}-\d{2}-\d{2}):v\d+$/.exec(leagueId)
-  return match ? match[1] : ""
 }

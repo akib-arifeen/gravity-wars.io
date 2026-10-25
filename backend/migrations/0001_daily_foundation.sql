@@ -1,8 +1,9 @@
 -- Local-only D1 schema for the daily challenge foundation.
 --
--- Nothing here identifies a person: actor_hash is an HMAC of the request IP under a server
--- secret, and tokens/nonces are stored only as SHA-256 digests. No raw IP, name, email or client
--- storage id is persisted.
+-- No direct identifiers are stored. actor_hash is a pseudonymous HMAC of the request IP under a
+-- server secret; it is still linkable to an IP by whoever holds the secret, so treat this data as
+-- pseudonymous, not anonymous. Tokens and nonces are stored only as SHA-256 digests. No raw IP,
+-- name, email or client storage id is persisted.
 
 CREATE TABLE IF NOT EXISTS leagues (
   -- "daily:<UTC date>:v<ruleset>" — one row per day and ruleset.
@@ -27,10 +28,10 @@ CREATE TABLE IF NOT EXISTS runs (
   issued_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
   consumed_at INTEGER,
-  submission_id TEXT
+  submission_id TEXT,
+  -- An assisted run is never ranked. Enforced here as well as in the handler.
+  CHECK (assisted = 0 OR ranked = 0)
 );
-
-CREATE INDEX IF NOT EXISTS runs_actor_issued ON runs (actor_hash, issued_at);
 
 CREATE TABLE IF NOT EXISTS submissions (
   id TEXT PRIMARY KEY,
@@ -47,7 +48,9 @@ CREATE TABLE IF NOT EXISTS submissions (
   verified INTEGER NOT NULL CHECK (verified IN (0, 1)),
   submitted_at INTEGER NOT NULL,
   replay_ms INTEGER NOT NULL,
-  engine TEXT NOT NULL
+  engine TEXT NOT NULL,
+  -- An assisted submission is never ranked, regardless of what the handler computes.
+  CHECK (assisted = 0 OR ranked = 0)
 );
 
 CREATE INDEX IF NOT EXISTS submissions_board

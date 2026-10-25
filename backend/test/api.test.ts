@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { DAILY_RULESET_VERSION } from "../../game/daily.ts"
+import { addDays, DAILY_RULESET_VERSION } from "../../game/daily.ts"
 import { encodeTrace } from "../../game/runTrace.ts"
+import { hmacHex, sha256Hex } from "../src/crypto.ts"
 import { MAX_BODY_BYTES, RUN_TTL_MS } from "../src/daily.ts"
 import { FIXED_NOW, call, jsonInit, leagueForTest, recordAutopilotRun, testEnv } from "./helpers.ts"
 
@@ -190,6 +191,16 @@ describe("daily API", () => {
       "key-nonce-0001",
     )
     expect(wrongNonce.status).toBe(403)
+
+    // Binding rejection must happen before trace decoding.
+    const badTokenBadTrace = await submit(
+      env,
+      descriptor,
+      submissionBody(descriptor, { token: "x".repeat(43), trace: { format: "gwt1", data: "AAAA" } }),
+      "key-binding-order-0001",
+    )
+    expect(badTokenBadTrace.status).toBe(403)
+    expect(await badTokenBadTrace.json()).toMatchObject({ error: { code: "INVALID_BINDING" } })
   })
 
   it("rejects another client's run", async () => {
@@ -288,6 +299,41 @@ describe("daily API", () => {
     expect(await differentTrace.json()).toMatchObject({ error: { code: "RUN_ALREADY_SUBMITTED" } })
   })
 
+  it("returns the stored response when a concurrent retry wins the idempotency race", async () => {
+    const { env, db } = testEnv()
+    const descriptor = await issue(env)
+    // A higher score is already on the board, so this submission's live rank would be 2.
+    await seedSubmission(db, descriptor.leagueId, "race", recorded.score + 50, FIXED_NOW - 5000, true)
+
+    const key = "key-race-0001"
+    const body = submissionBody(descriptor)
+    const raw = JSON.stringify(body)
+    const actorHash = await hmacHex("test-only-actor-key", "203.0.113.10")
+    const keyHash = await sha256Hex(`${actorHash}:${descriptor.runId}:${key}`)
+    const requestHash = await sha256Hex(raw)
+    const storedBody = JSON.stringify({ stored: true, rank: 1 })
+    await db
+      .prepare(
+        `INSERT INTO idempotency_keys
+           (key_hash, actor_hash, request_hash, status, response_json, created_at, expires_at)
+         VALUES (?, ?, ?, 201, ?, ?, ?)`,
+      )
+      .bind(keyHash, actorHash, requestHash, storedBody, FIXED_NOW, FIXED_NOW + 60_000)
+      .run()
+
+    // Simulate the race: the initial lookup misses, then the insert finds the other request's row.
+    const racingEnv = { ...env, DB: hideFirstIdempotencyRead(db) } as Env
+    const response = await call(
+      racingEnv,
+      descriptor.submission.path,
+      jsonInit(body, { "idempotency-key": key }),
+      FIXED_NOW,
+    )
+    expect(response.status).toBe(201)
+    expect(response.headers.get("idempotent-replay")).toBe("true")
+    expect(await response.text()).toBe(storedBody)
+  })
+
   it("validates shape, headers, size and routes", async () => {
     const { env } = testEnv()
     const descriptor = await issue(env)
@@ -365,6 +411,74 @@ describe("daily API", () => {
     expect((await call(env, "/v1/daily/leaderboard?limit=0", {}, FIXED_NOW)).status).toBe(422)
   })
 
+  it("returns 409, not 500, for a run stored under a previous ruleset", async () => {
+    const { env, db } = testEnv()
+    const descriptor = await issue(env)
+    const oldLeagueId = `daily:${descriptor.challenge.date}:v0`
+    await db
+      .prepare(
+        `INSERT INTO leagues (id, date, ruleset_version, seed, arena, difficulty, created_at)
+         VALUES (?, ?, 0, 123, 'classic', 'normal', ?)`,
+      )
+      .bind(oldLeagueId, descriptor.challenge.date, FIXED_NOW)
+      .run()
+    await db.prepare(`UPDATE runs SET league_id = ? WHERE id = ?`).bind(oldLeagueId, descriptor.runId).run()
+
+    const response = await submit(env, descriptor, submissionBody(descriptor), "key-oldruleset-0001")
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({
+      error: { code: "RULESET_MISMATCH", details: { run: 0, current: DAILY_RULESET_VERSION } },
+    })
+  })
+
+  it("keeps leaderboard history for a stored previous ruleset", async () => {
+    const { env, db } = testEnv()
+    const historicalDate = addDays(league.date, -2)
+    const oldLeagueId = `daily:${historicalDate}:v0`
+    await db
+      .prepare(
+        `INSERT INTO leagues (id, date, ruleset_version, seed, arena, difficulty, created_at)
+         VALUES (?, ?, 0, 123, 'classic', 'normal', ?)`,
+      )
+      .bind(oldLeagueId, historicalDate, FIXED_NOW)
+      .run()
+    const submittedAt = FIXED_NOW - 2 * 86_400_000
+    await seedSubmission(db, oldLeagueId, "history", 42, submittedAt, true)
+
+    const response = await call(env, `/v1/daily/leaderboard?date=${historicalDate}`, {}, FIXED_NOW)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      date: historicalDate,
+      leagueId: oldLeagueId,
+      rulesetVersion: 0,
+      entries: [{ rank: 1, score: 42, submittedAt: new Date(submittedAt).toISOString(), assisted: false }],
+    })
+  })
+
+  it("returns an empty board with no league id when a date has no stored league", async () => {
+    const { env } = testEnv()
+    const response = await call(env, "/v1/daily/leaderboard", {}, FIXED_NOW)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      date: league.date,
+      leagueId: null,
+      rulesetVersion: null,
+      entries: [],
+    })
+  })
+
+  it("validates a leaderboard read before consuming a rate-limit write", async () => {
+    const { env, db } = testEnv()
+    const writes = async () =>
+      Number((await db.prepare("SELECT COUNT(*) AS n FROM rate_limits").first<{ n: number }>())?.n ?? 0)
+
+    expect(await writes()).toBe(0)
+    expect((await call(env, "/v1/daily/leaderboard?limit=0", {}, FIXED_NOW)).status).toBe(422)
+    expect(await writes()).toBe(0)
+    expect((await call(env, "/v1/daily/leaderboard?date=2026-02-30", {}, FIXED_NOW)).status).toBe(422)
+    expect(await writes()).toBe(0)
+  })
+
   it("rate-limits descriptor issuance per client", async () => {
     const { env } = testEnv()
     for (let i = 0; i < 6; i++) await issue(env)
@@ -400,4 +514,27 @@ async function seedSubmission(
     )
     .bind(`sub-${suffix}`, runId, leagueId, `actor-${suffix}`, score, score, `trace-${suffix}`, ranked ? 1 : 0, submittedAt)
     .run()
+}
+
+/**
+ * Hide only the first idempotency SELECT so a test can insert the winning row between the
+ * handler's initial lookup and its conditional insert.
+ */
+function hideFirstIdempotencyRead(db: D1Database): D1Database {
+  let hidden = false
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === "prepare") {
+        return (sql: string) => {
+          if (!hidden && sql.includes("FROM idempotency_keys")) {
+            hidden = true
+            return { bind: () => ({ first: async () => null }) } as unknown as D1PreparedStatement
+          }
+          return target.prepare(sql)
+        }
+      }
+      const value = Reflect.get(target, prop, target)
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  }) as D1Database
 }

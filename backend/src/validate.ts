@@ -6,14 +6,13 @@ export interface IssueInput {
   assisted: boolean
 }
 
-export interface SubmissionInput {
+export interface SubmissionBinding {
   rulesetVersion: number
   nonce: string
   token: string
   assisted: boolean
   claimedScore: number
   traceData: string
-  trace: RunTrace
 }
 
 export function parseIssueInput(value: unknown): IssueInput {
@@ -24,7 +23,12 @@ export function parseIssueInput(value: unknown): IssueInput {
   return { assisted }
 }
 
-export function parseSubmissionInput(value: unknown): SubmissionInput {
+/**
+ * Shape-check the cheap, binding-relevant fields. Trace decoding is deliberately separate so the
+ * server can reject an unknown run, a wrong actor, an expired descriptor, a stale ruleset or a
+ * bad nonce/token before spending CPU on a large trace.
+ */
+export function parseSubmissionBinding(value: unknown): SubmissionBinding {
   if (!isRecord(value)) invalid("body must be a JSON object")
 
   const rulesetVersion = integer(value.rulesetVersion, "rulesetVersion", 1, 1_000_000)
@@ -43,9 +47,21 @@ export function parseSubmissionInput(value: unknown): SubmissionInput {
     invalid("trace.data must be a non-empty base64url string")
   }
 
+  return {
+    rulesetVersion,
+    nonce: value.nonce,
+    token: value.token,
+    assisted: value.assisted,
+    claimedScore,
+    traceData: value.trace.data,
+  }
+}
+
+/** Decode the trace only after the run, actor, ruleset and token have been accepted. */
+export function decodeSubmissionTrace(binding: SubmissionBinding): RunTrace {
   let trace: RunTrace
   try {
-    trace = decodeTrace(value.trace.data)
+    trace = decodeTrace(binding.traceData)
   } catch (error) {
     if (error instanceof RunTraceError) {
       throw new HttpError(422, "TRACE_INVALID", error.message)
@@ -57,16 +73,7 @@ export function parseSubmissionInput(value: unknown): SubmissionInput {
       details: { maxTraceSteps: MAX_TRACE_STEPS },
     })
   }
-
-  return {
-    rulesetVersion,
-    nonce: value.nonce,
-    token: value.token,
-    assisted: value.assisted,
-    claimedScore,
-    traceData: value.trace.data,
-    trace,
-  }
+  return trace
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

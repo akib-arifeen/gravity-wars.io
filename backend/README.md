@@ -34,9 +34,13 @@ Shared with the client:
 3. The client plays that seed and records one player `Intent` per fixed `step()`.
 4. `POST /v1/daily/runs/:runId/submissions` with an `Idempotency-Key` sends the nonce, token,
    trace and claimed score.
-5. The server replays the trace on the real engine, scores the player's **server-side peak mass**
-   and ignores the claim except as a bounded consistency check.
-6. The leaderboard is derived from stored submissions; there is no separate score table.
+5. The server resolves the **stored league** for the run and replays the trace with its
+   seed/arena/difficulty on the real engine. It scores the player's **server-side peak mass** and
+   ignores the claim except as a bounded consistency check. A run stored under a previous ruleset
+   is rejected with 409 `RULESET_MISMATCH`, not replayed under today's rules.
+6. The leaderboard is derived from stored submissions; there is no separate score table. It
+   resolves the stored league for the requested date, so older ruleset results remain readable
+   within the 31-day window.
 
 Only the SHA-256 digests of the nonce and token are stored. The token is returned once, in the
 descriptor, and is compared in constant time at submission.
@@ -45,7 +49,8 @@ descriptor, and is compared in constant time at submission.
 
 `assisted` is declared when the descriptor is issued and cannot change at submission. Assisted
 runs are replayed and stored but are never ranked (`ranked = false`, no rank) and are excluded
-from the leaderboard.
+from the leaderboard. The D1 schema enforces the same rule on `runs` and `submissions` with
+`CHECK (assisted = 0 OR ranked = 0)`, so a future code path cannot accidentally rank one.
 
 This is an honour-system marker, not cheat detection. There is no authentication, and the server
 cannot see whether the browser used the debug autopilot. A future account layer or a trusted
@@ -99,7 +104,7 @@ All responses are JSON, `cache-control: no-store`, with `x-request-id`.
 | `GET` | `/v1/health` | Checks the D1 binding; returns the ruleset version |
 | `POST` | `/v1/daily/runs` | Optional `{ "assisted": boolean }`; 201 with the descriptor |
 | `POST` | `/v1/daily/runs/:runId/submissions` | Requires `Idempotency-Key`; 201 first write, replay on retry |
-| `GET` | `/v1/daily/leaderboard?date=YYYY-MM-DD&limit=10` | Today by default; last 31 days; limit 1–50 |
+| `GET` | `/v1/daily/leaderboard?date=YYYY-MM-DD&limit=10` | Today by default; last 31 days; limit 1–50; resolves the stored league and returns `null` league fields when the date has none |
 
 Submission body:
 
@@ -138,13 +143,18 @@ Codes include `INVALID_REQUEST`, `INVALID_JSON`, `PAYLOAD_TOO_LARGE`,
 - `Idempotency-Key` is 8–200 visible ASCII characters. The stored key is
   `SHA-256(actorHash:runId:key)`, the request is `SHA-256(raw body)`, and the full response is
   replayed with `idempotent-replay: true`. Same key + different body is 409. Re-sending the same
-  trace under a new key returns the existing result; a different trace is 409.
+  trace under a new key returns the existing result; a different trace is 409. If two honest
+  retries of the same body race, the loser returns the winner's stored response even when the
+  leaderboard rank changed between them; it does not manufacture a 409.
 - A run is consumed once. The conditional insert and the run update share one D1 batch.
 - Fixed-window limits: 6 run issues/minute and 40/day; 10 submissions/minute and 40/day;
-  120 leaderboard reads/minute. All are per `actorHash`.
+  120 leaderboard reads/minute. All are per `actorHash`. Leaderboard date/limit validation runs
+  before the rate-limit write, so an invalid read costs no quota.
 - `actorHash` is HMAC-SHA-256 of `CF-Connecting-IP` under `ACTOR_HASH_KEY`; the raw IP is never
-  stored or logged. Tokens and nonces are stored only as digests. Leaderboard rows carry
-  `rank`, `score`, `submittedAt` and `assisted` only: no names, ids, IPs or actor hashes.
+  stored or logged. It is pseudonymous, not anonymous: whoever holds the secret can still link a
+  hash to an IP, so retain it accordingly. Tokens and nonces are stored only as digests.
+  Leaderboard rows carry `rank`, `score`, `submittedAt` and `assisted` only: no names, ids, IPs or
+  actor hashes.
 
 ## Run it locally
 
@@ -159,7 +169,8 @@ cf dev
 
 `cf dev` serves the Worker at `http://localhost:5173` and uses
 `backend/.cloudflare/state/v3` for local D1. Both `.dev.vars` and `.cloudflare/` are ignored by
-git.
+git. `0001` was edited in place while this PR is local-only; delete `backend/.cloudflare/state`
+before re-applying it if you had applied an earlier draft of the migration.
 
 Verification (from the repository root):
 

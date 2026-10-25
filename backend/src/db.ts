@@ -1,3 +1,4 @@
+import { ARENA_IDS } from "../../game/arenas.ts"
 import type { League, RunRow } from "./daily.ts"
 
 export interface SubmissionRow {
@@ -43,6 +44,31 @@ export async function ensureLeague(db: D1Database, league: League, now: number):
     )
     .bind(league.id, league.date, league.rulesetVersion, league.seed, league.arena, league.difficulty, now)
     .run()
+}
+
+/** The stored league for a run. Replay uses these values, not today's derived challenge. */
+export async function getLeagueById(db: D1Database, id: string): Promise<League | null> {
+  const row = await db
+    .prepare(`SELECT id, date, ruleset_version, seed, arena, difficulty FROM leagues WHERE id = ?`)
+    .bind(id)
+    .first<Record<string, unknown>>()
+  return row ? leagueFromRow(row) : null
+}
+
+/**
+ * The league that owns a date's leaderboard: the highest stored ruleset version for that date.
+ * Resolving the stored row keeps history readable after a ruleset bump while staying bounded to
+ * one league per date.
+ */
+export async function getLatestLeagueForDate(db: D1Database, date: string): Promise<League | null> {
+  const row = await db
+    .prepare(
+      `SELECT id, date, ruleset_version, seed, arena, difficulty FROM leagues
+       WHERE date = ? ORDER BY ruleset_version DESC LIMIT 1`,
+    )
+    .bind(date)
+    .first<Record<string, unknown>>()
+  return row ? leagueFromRow(row) : null
 }
 
 export async function insertRun(db: D1Database, run: RunRow): Promise<void> {
@@ -101,7 +127,7 @@ export async function rankBefore(
   const row = await db
     .prepare(
       `SELECT COUNT(*) AS n FROM submissions
-       WHERE league_id = ? AND ranked = 1 AND verified = 1
+       WHERE league_id = ? AND ranked = 1 AND verified = 1 AND assisted = 0
          AND (score > ? OR (score = ? AND (submitted_at < ? OR (submitted_at = ? AND id < ?))))`,
     )
     .bind(leagueId, score, score, submittedAt, submittedAt, id)
@@ -159,7 +185,7 @@ export async function getLeaderboard(
   const result = await db
     .prepare(
       `SELECT id, score, submitted_at, assisted FROM submissions
-       WHERE league_id = ? AND ranked = 1 AND verified = 1
+       WHERE league_id = ? AND ranked = 1 AND verified = 1 AND assisted = 0
        ORDER BY score DESC, submitted_at ASC, id ASC
        LIMIT ?`,
     )
@@ -191,4 +217,21 @@ export async function insertIdempotency(db: D1Database, row: IdempotencyRow): Pr
 
 export async function deleteIdempotency(db: D1Database, keyHash: string): Promise<void> {
   await db.prepare(`DELETE FROM idempotency_keys WHERE key_hash = ?`).bind(keyHash).run()
+}
+
+function leagueFromRow(row: Record<string, unknown>): League {
+  const arena = ARENA_IDS.find((id) => id === row.arena)
+  if (!arena) throw new Error(`Stored league has an unknown arena: ${String(row.arena)}`)
+  const difficulty = row.difficulty
+  if (difficulty !== "easy" && difficulty !== "normal" && difficulty !== "hard") {
+    throw new Error(`Stored league has an unknown difficulty: ${String(difficulty)}`)
+  }
+  return {
+    id: String(row.id),
+    date: String(row.date),
+    rulesetVersion: Number(row.ruleset_version),
+    seed: Number(row.seed),
+    arena,
+    difficulty,
+  }
 }
