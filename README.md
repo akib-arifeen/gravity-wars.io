@@ -6,7 +6,7 @@ Play it: https://gravity-warsio.vercel.app
 
 ## Modes
 
-- **First run** starts on **Easy** in the **Classic** arena, and the menu remembers whatever you pick from then on. That first-run pair is for a browser with no saved play at all: with any saved record but no stored choice (an older build never stored a skill), the menu opens on **Normal** and the **Random** arena instead, so it never guesses that a returning player is a newcomer. The in-game HUD shows live speed, `Esc` pauses to a screen that re-reads the controls, and the first death of an Endless round adds one tip.
+- **First run** starts on **Easy** in the **Classic** arena, and the menu remembers whatever you pick from then on. That first-run pair is for a browser with no saved play at all: with any saved record but no stored choice (an older build never stored a skill), the menu opens on **Normal** and the **Random** arena instead, so it never guesses that a returning player is a newcomer. A stored choice is applied in the same commit that hydrates, before that first paint, so the menu is already yours when it becomes live; the exported HTML itself is the first-run menu until the page hydrates, so this shortens the swap rather than removing the window entirely. The in-game HUD shows live speed, `Esc` pauses to a screen that re-reads the controls, and the first death of an Endless round adds one tip.
 - **Endless** (the default) never ends.
   - You respawn a few seconds after you die, and your best score for the session is kept.
   - Bots of varied skill join and leave all the time, and they get tougher as you grow.

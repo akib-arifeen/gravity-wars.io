@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { emptyProfile, loadProfile, PROFILE_KEY, type AchievementDef } from "@/game/achievements"
+import { emptyProfile, loadProfile, type AchievementDef } from "@/game/achievements"
 import { ARENA_IDS } from "@/game/arenas"
 import { createSfx, type Sfx } from "@/game/audio"
 import { type BossHud } from "@/game/boss"
@@ -9,7 +9,6 @@ import {
   ABILITY_UNLOCKS,
   CAMPAIGN_LEVELS,
   allRelicsFound,
-  CAMPAIGN_PROGRESS_KEY,
   currentLevel,
   emptyProgress,
   evaluateBonus,
@@ -24,7 +23,7 @@ import {
   type CampaignLevel,
   type CampaignProgress,
 } from "@/game/campaign"
-import { dailyScore, dailyStreak, DAILY_KEY, emptyDaily, loadDaily, recordDailyRun, refreshDaily, saveDaily, type DailyConfig, type DailyProgress } from "@/game/daily"
+import { dailyScore, dailyStreak, emptyDaily, loadDaily, recordDailyRun, refreshDaily, saveDaily, type DailyConfig, type DailyProgress } from "@/game/daily"
 import { recordsRoundBest, runArena, type RunKind } from "@/game/run-summary"
 import { shareCard, shareOrCopy } from "@/game/share"
 import { ARENAS } from "@/game/arenas"
@@ -35,7 +34,6 @@ import { Hud } from "./components/Hud"
 import { ProfilePanel } from "./components/Profile"
 import {
   ARENA_CHOICES,
-  BEST_KEY,
   EndScreen,
   MenuScreen,
   PauseScreen,
@@ -47,7 +45,7 @@ import {
   type MenuMode,
 } from "./components/Screens"
 import { Toasts, type ToastItem } from "./components/Toasts"
-import { startDefaults } from "./startDefaults"
+import { ARENA_KEY, DIFFICULTY_KEY, hasPlayHistory, startDefaults } from "./startDefaults"
 
 type Screen = "menu" | "playing" | "paused" | "over"
 
@@ -60,9 +58,7 @@ interface Outcome {
 }
 
 const MUTE_KEY = "gw:muted"
-const ARENA_KEY = "gw:arena"
 const MODE_KEY = "gw:mode"
-const DIFFICULTY_KEY = "gw:difficulty"
 const TOAST_MS = 3500
 /** The cosmetic reward for recovering every hidden relic. */
 // ds-allow-hardcode: player body colour is game data, not a UI theme token.
@@ -78,19 +74,14 @@ function newSeed(): number {
 const FIRST_RUN = startDefaults({})
 
 /**
- * Restore the stored menu choices before the browser paints. A plain effect would paint the
- * first-run menu first and then swap in the player's own choice, which reads as a flash; a layout
- * effect runs after hydration and before paint. It never runs on the server, so the HTML the
- * server sends still matches the first-run defaults the client hydrates with.
+ * Apply the stored menu choices in the same commit that hydrates, before the browser paints it, so
+ * the menu is already the returning player's when it first becomes live: the first-run values are
+ * replaced before the next paint and before any click can land. This cannot remove the served
+ * markup, which a static export always writes as the first-run menu until the client hydrates; it
+ * only means the swap happens inside hydration rather than visibly after it. A plain effect would
+ * paint the first-run menu first and then change it under the player.
  */
 const useIsoLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect
-
-/**
- * Any of these keys means this browser has played before: a saved best, profile, daily record,
- * campaign progress, or a menu choice from an earlier visit. An existing player can be missing any
- * single one, `gw:difficulty` included, so the first-run rule reads all of them.
- */
-const HISTORY_KEYS = [BEST_KEY, PROFILE_KEY, DAILY_KEY, CAMPAIGN_PROGRESS_KEY, DIFFICULTY_KEY, ARENA_KEY, MODE_KEY]
 
 export default function Page() {
   const [screen, setScreen] = useState<Screen>("menu")
@@ -182,18 +173,17 @@ export default function Page() {
     }
   }, [])
 
-  // Restore the stored menu choices before the first paint, so a returning player never sees the
-  // first-run menu flash past. `hasHistory` is why a missing `gw:difficulty` alone does not make a
-  // veteran a newcomer.
+  // Restore the stored menu choices inside hydration, so a returning player never sees the menu
+  // change under them once it is live. `hasPlayHistory` is why a missing `gw:difficulty` alone does
+  // not make a veteran a newcomer — and why a mode tab click alone does not make one a veteran.
   useIsoLayoutEffect(() => {
     try {
       const s = window.localStorage
       if (s.getItem(MUTE_KEY) === "1") setMuted(true)
-      const has = (key: string) => s.getItem(key) !== null
       const start = startDefaults({
         difficulty: s.getItem(DIFFICULTY_KEY),
         arena: s.getItem(ARENA_KEY),
-        hasHistory: HISTORY_KEYS.some(has),
+        hasHistory: hasPlayHistory((key) => s.getItem(key)),
       })
       setDifficulty(start.difficulty)
       setArena(start.arena)

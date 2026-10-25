@@ -66,9 +66,16 @@ export function clockText(seconds: number): string {
 }
 
 /**
- * The Round clock as the menu states it. Random is a real choice, and the two possible lengths
+ * The clock as a whole noun phrase for a sentence: "2:30 match", or, for Random, both possible
+ * matches with the arena that makes the difference. Random is a real choice and the two lengths
  * differ, so the copy names both instead of guessing which arena the engine will pick.
  */
+export function matchLengthText(arena: ArenaChoice): string {
+  if (arena === "random") return `A ${clockText(roundSeconds("classic"))} match, or ${clockText(roundSeconds("vast"))} in The Vast`
+  return `${clockText(roundSeconds(arena))} match`
+}
+
+/** The bare clock, for copy that supplies its own noun: "One round, 2:30." */
 export function roundLengthText(arena: ArenaChoice): string {
   if (arena === "random") return `${clockText(roundSeconds("classic"))}, or ${clockText(roundSeconds("vast"))} in The Vast`
   return clockText(roundSeconds(arena))
@@ -89,7 +96,7 @@ export const MODES: { id: MenuMode; label: string; copy: (ctx: ModeCopyContext) 
     id: "round",
     label: "Round",
     copy: ({ arena }) =>
-      `${roundLengthText(arena)} match. Reach ${CONFIG.round.criticalMass} mass or be the last one left.`,
+      `${matchLengthText(arena)}. Reach ${CONFIG.round.criticalMass} mass or be the last one left.`,
   },
   { id: "campaign", label: "Campaign", copy: () => "The Long Fall \u2014 twelve levels down three sectors, three bosses, one way out." },
   {

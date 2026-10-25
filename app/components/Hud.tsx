@@ -10,7 +10,7 @@ import { FEED_MAX, type FeedItem, type FeedView } from "@/game/feed"
 import type { AbilityId } from "@/game/campaign"
 import type { LeaderboardEntry } from "@/game/types"
 import { AbilityIcon, LockIcon, WallIcon } from "./Icons"
-import { centreHud, dashName, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, speedLine, BURN_TIP, type HudMode } from "./hudView"
+import { centreHud, dashName, dismissesLeaderboard, leaderboardRows, rankPill, rankPillLabel, speedCapText, speedLine, speedValue, BURN_TIP, type HudMode } from "./hudView"
 
 /** Campaign context the HUD shows: the level badge and its goal. */
 export interface CampaignHud {
@@ -162,6 +162,8 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const energyPct = hud ? Math.min(100, Math.max(0, (hud.energy / hud.energyMax) * 100)) : 0
   const energyLow = hud ? hud.energy < CONFIG.energy.lowThreshold : false
   const timeCritical = hud ? hud.phase === "playing" && hud.timeLeft <= 10 : false
+  // The surge ceiling, if any: a narrow phone drops this before it drops the number itself.
+  const speedCap = hud ? speedCapText(hud.assist.surge, hud.assist.surgeMul) : ""
 
   const status: string[] = []
   if (hud?.pulling) status.push("PULLING")
@@ -319,11 +321,26 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                 )}
               </div>
             ) : null}
-            {/* Live speed: the number a prograde burn is judged on, so "DASH ALONG PATH" has a
-                visible payoff. Not a live region (it changes at 10 Hz); the aria-live status
-                paragraph below stays the only thing that speaks. */}
+            {/* Live speed: the body's absolute speed, shown so "DASH ALONG PATH" has a visible
+                payoff. It is not the figure a burn is graded on — the engine grades a pass
+                relative to the well — and the surge multiplier beside it is the temporary speed
+                ceiling, not a measured ratio. Not a live region (it changes at 10 Hz); the
+                aria-live status paragraph below stays the only thing that speaks. */}
             {hud.phase !== "countdown" && (
-              <div className="gw-hud-speed">{speedLine(hud.speed, hud.assist.surge, hud.assist.surgeMul)}</div>
+              <div className="gw-hud-speed">
+                {/* The whole line for assistive tech; the parts below are what a narrow phone can
+                    trim. Not a live region, so the visible split never announces twice. */}
+                <span className="gw-sr-only">{speedLine(hud.speed, hud.assist.surge, hud.assist.surgeMul)}</span>
+                <span aria-hidden="true" className="gw-speed-prefix">
+                  SPEED{" "}
+                </span>
+                <span aria-hidden="true">{speedValue(hud.speed)}</span>
+                {speedCap && (
+                  <span aria-hidden="true" className="gw-speed-cap">
+                    {speedCap}
+                  </span>
+                )}
+              </div>
             )}
           </div>
 

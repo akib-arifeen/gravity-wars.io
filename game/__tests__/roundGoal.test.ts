@@ -66,6 +66,18 @@ function play(seed: number, criticalMass: number): Run {
   }
 }
 
+/** One batch of 12 seeded rounds per goal, run once: three tests compare the same numbers. */
+const batches = new Map<number, Run[]>()
+
+function batch(criticalMass: number): Run[] {
+  let runs = batches.get(criticalMass)
+  if (!runs) {
+    runs = SEEDS.map((s) => play(s, criticalMass))
+    batches.set(criticalMass, runs)
+  }
+  return runs
+}
+
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b)
   return sorted[Math.floor(sorted.length / 2)]
@@ -75,7 +87,7 @@ describe("the Round goal at newcomer pace", () => {
   it(
     "the no-race baseline ends on the clock (not on mass or a wipeout) and peaks near the goal",
     () => {
-      const runs = SEEDS.map((s) => play(s, NO_RACE))
+      const runs = batch(NO_RACE)
       const peaks = runs.map((r) => r.peak)
       const byReason = (reason: string) => runs.filter((r) => r.reason === reason).length
 
@@ -99,7 +111,7 @@ describe("the Round goal at newcomer pace", () => {
   it(
     "a 90 goal makes every round a short mass sprint without winning more often",
     () => {
-      const runs = SEEDS.map((s) => play(s, 90))
+      const runs = batch(90)
       expect(runs.filter((r) => r.reason === "criticalMass").length).toBe(SEEDS.length)
       expect(median(runs.map((r) => r.seconds))).toBeLessThanOrEqual(100)
     },
@@ -109,9 +121,9 @@ describe("the Round goal at newcomer pace", () => {
   it(
     "the shipped goal is winnable and keeps some rounds going the distance",
     () => {
-      const runs = SEEDS.map((s) => play(s, CONFIG.round.criticalMass))
+      const runs = batch(CONFIG.round.criticalMass)
       const seconds = median(runs.map((r) => r.seconds))
-      const short = SEEDS.map((s) => play(s, 90))
+      const short = batch(90)
       expect(runs.filter((r) => r.won).length).toBeGreaterThanOrEqual(2)
       // At 130 some rounds still reach the clock or end with the reference's death; at 90 none do.
       expect(runs.filter((r) => r.reason !== "criticalMass").length).toBeGreaterThan(0)

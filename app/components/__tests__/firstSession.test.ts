@@ -12,10 +12,16 @@ import { createWorld, hudSnapshot } from "@/game/engine"
 import type { FeedView } from "@/game/feed"
 import type { DeathCause } from "@/game/types"
 import { burnPromptLabel } from "@/game/render"
-import { startDefaults } from "@/app/startDefaults"
+import {
+  ARENA_KEY,
+  DIFFICULTY_KEY,
+  hasPlayHistory,
+  HISTORY_KEYS,
+  startDefaults,
+} from "@/app/startDefaults"
 import { Hud } from "../Hud"
 import { BURN_TIP, respawnTip } from "../hudView"
-import { ARENA_CHOICES, MenuScreen, MODES, PauseScreen, roundLengthText, type MenuMode } from "../Screens"
+import { ARENA_CHOICES, MenuScreen, matchLengthText, MODES, PauseScreen, roundLengthText, type MenuMode } from "../Screens"
 
 const noop = () => {}
 
@@ -49,6 +55,32 @@ describe("first-run defaults", () => {
     }
   })
 
+  it("does not count a menu tab click as play history", () => {
+    // A first-time visitor who taps Round and leaves has stored a mode and nothing else.
+    const store = new Map([["gw:mode", "round"]])
+    const read = (k: string) => store.get(k) ?? null
+    expect(hasPlayHistory(read)).toBe(false)
+    expect(startDefaults({ hasHistory: hasPlayHistory(read) })).toEqual({ difficulty: "easy", arena: "classic" })
+    expect(HISTORY_KEYS).not.toContain("gw:mode")
+
+    // Real play does: one saved best is enough, and the stored mode still comes back separately.
+    store.set("gw:best:v1", JSON.stringify({ easy: { wins: 1, bestMass: 90 } }))
+    expect(hasPlayHistory(read)).toBe(true)
+    expect(startDefaults({ hasHistory: hasPlayHistory(read) })).toEqual({ difficulty: "normal", arena: "random" })
+    expect(store.get("gw:mode")).toBe("round")
+  })
+
+  it("reads history from the record keys a played browser writes, and from no choice key", () => {
+    for (const key of ["gw:best:v1", "gw:profile:v1", "gw:daily:v1", "gw:campaign:v2"]) {
+      expect(hasPlayHistory((k) => (k === key ? "1" : null)), key).toBe(true)
+    }
+    // A stored skill or arena is a menu choice, not proof of play; the mode tab least of all.
+    for (const key of [DIFFICULTY_KEY, ARENA_KEY, "gw:mode"]) {
+      expect(hasPlayHistory((k) => (k === key ? "1" : null)), key).toBe(false)
+    }
+    expect(hasPlayHistory(() => null)).toBe(false)
+  })
+
   it("treats an unreadable stored value as absent, not as a choice", () => {
     expect(startDefaults({ difficulty: "nightmare", arena: "lava" })).toEqual({ difficulty: "easy", arena: "classic" })
     expect(startDefaults({ difficulty: "nightmare", arena: "lava", hasHistory: true })).toEqual({
@@ -71,9 +103,26 @@ describe("match copy matches the engine", () => {
   })
 
   it("names both possible clocks for Random instead of guessing the arena", () => {
+    // The bare clock list, for copy that supplies its own noun.
     expect(roundLengthText("random")).toBe("2:30, or 3:30 in The Vast")
-    expect(copy("round", "random")).toContain("2:30, or 3:30 in The Vast")
+    // The Round sentence needs a subject of its own, or it reads "… in The Vast match."
+    expect(matchLengthText("random")).toBe("A 2:30 match, or 3:30 in The Vast")
+    expect(matchLengthText("classic")).toBe("2:30 match")
+    expect(matchLengthText("vast")).toBe("3:30 match")
     expect(ARENA_CHOICES).toContain("random")
+  })
+
+  it("writes the whole Random Round sentence grammatically", () => {
+    expect(copy("round", "random")).toBe(
+      "A 2:30 match, or 3:30 in The Vast. Reach 130 mass or be the last one left.",
+    )
+    expect(copy("round", "classic")).toBe("2:30 match. Reach 130 mass or be the last one left.")
+    expect(copy("round", "vast")).toBe("3:30 match. Reach 130 mass or be the last one left.")
+    // Nothing dangles a noun after the arena name.
+    for (const arena of ["classic", "vast", "random"] as const) {
+      expect(copy("round", arena)).not.toMatch(/The Vast match|Vast\.? match\./i)
+      expect(copy("round", arena)).not.toMatch(/\bmatch\.\s*match\b/i)
+    }
   })
 
   it("never puts a universal 2:30 on a Vast round", () => {
@@ -150,7 +199,7 @@ describe("what the rendered menu says", () => {
     expect(vast).not.toContain("2:30 match")
 
     const random = renderToStaticMarkup(menu("round", "random", "desktop"))
-    expect(random).toContain("2:30, or 3:30 in The Vast")
+    expect(random).toContain("A 2:30 match, or 3:30 in The Vast. Reach 130 mass or be the last one left.")
   })
 
   it("gives the daily panel a real clock only from what it knows", () => {
@@ -222,7 +271,11 @@ describe("HUD labels and readouts", () => {
     expect(still).not.toContain("×1.24")
 
     const surging = hudMarkup({ ...snap, speed: 342.4, assist: { ...snap.assist, surge: 2.1, surgeMul: 1.24 } })
+    // The whole line stays in the DOM for assistive tech; the visible parts can be trimmed by width.
     expect(surging).toContain("SPEED 342 u/s · ×1.24 cap")
+    expect(surging).toContain("gw-speed-prefix")
+    expect(surging).toContain("gw-speed-cap")
+    expect(surging).toMatch(/<span class="gw-sr-only">SPEED 342 u\/s · ×1\.24 cap<\/span>/)
   })
 
   it("hides the readout during the countdown, when nothing is moving yet", () => {

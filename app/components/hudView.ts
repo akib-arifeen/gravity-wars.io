@@ -40,10 +40,22 @@ export function respawnTip(cause: DeathCause): string {
  * relative to a well, so the label says SPEED and nothing more. `surgeMul` is the temporary
  * speed-ceiling multiplier from the burn, not a measured ratio of anything, so it is shown as
  * "×1.24 cap" only while a surge is running.
+ *
+ * The HUD splits this into parts so a narrow phone can drop the prefix and the ceiling before they
+ * run under the mass panel; the whole string stays in the DOM as the accessible copy at every width.
  */
+export function speedValue(speed: number): string {
+  return `${Math.max(0, Math.round(speed))} u/s`
+}
+
+/** The surge ceiling as a suffix (" · ×1.24 cap"), or "" when no surge is running. */
+export function speedCapText(surge: number, surgeMul: number): string {
+  return surge > 0 && surgeMul > 1 ? ` · ×${surgeMul.toFixed(2)} cap` : ""
+}
+
+/** The whole readout on one line: "SPEED 342 u/s · ×1.24 cap". */
 export function speedLine(speed: number, surge: number, surgeMul: number): string {
-  const base = `SPEED ${Math.max(0, Math.round(speed))} u/s`
-  return surge > 0 && surgeMul > 1 ? `${base} · ×${surgeMul.toFixed(2)} cap` : base
+  return `SPEED ${speedValue(speed)}${speedCapText(surge, surgeMul)}`
 }
 
 /** The quiet gap between two unready-Singularity answers (ms). */

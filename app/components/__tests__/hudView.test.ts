@@ -15,7 +15,9 @@ import {
   rankPillLabel,
   respawnTip,
   firstDeathTip,
+  speedCapText,
   speedLine,
+  speedValue,
   ultHintDue,
   ultHintNotice,
   ULT_HINT_MS,
@@ -156,6 +158,15 @@ describe("live speed readout", () => {
     expect(speedLine(342.4, 2.1, 1.24)).toBe("SPEED 342 u/s · ×1.24 cap")
     // A surge with no speed multiplier is not a multiplier.
     expect(speedLine(120, 1.5, 1)).toBe("SPEED 120 u/s")
+  })
+
+  it("splits into the value and the ceiling the HUD can trim separately", () => {
+    expect(speedValue(342.4)).toBe("342 u/s")
+    expect(speedCapText(2.1, 1.24)).toBe(" · ×1.24 cap")
+    expect(speedCapText(0, 1.24)).toBe("")
+    expect(speedCapText(2.1, 1)).toBe("")
+    // The whole line is still exactly the parts, so the accessible copy cannot drift.
+    expect(`SPEED ${speedValue(342.4)}${speedCapText(2.1, 1.24)}`).toBe(speedLine(342.4, 2.1, 1.24))
   })
 
   it("never implies the reading is well-relative or a measured ratio", () => {

@@ -2720,6 +2720,21 @@ body {
   }
 }
 
+/* The full readout is wider than the gap between the mass panel and the centre column on a narrow
+   phone, so the "SPEED" prefix and then the surge ceiling are dropped before the text can run
+   under the panel. The sr-only copy inside the element carries the whole line at every width. */
+@media (max-width: 419px) {
+  .gw-hud-speed .gw-speed-cap {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .gw-hud-speed .gw-speed-prefix {
+    display: none;
+  }
+}
+
 /* The single teaching line on the first respawn of an Endless round. */
 .gw-death-tip {
   margin-top: 10px;
@@ -2745,4 +2760,3 @@ body {
   text-align: center;
   color: #ffd36b;
 }
-
