@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, type PointerEvent as RPointerEvent } from "react"
+import { burnPromptVisible } from "@/game/assist"
 import { CONFIG } from "@/game/config"
 import type { InputController } from "@/game/input"
 import type { HudSnapshot } from "@/game/types"
@@ -249,6 +250,9 @@ export function TouchControls({ input, hud = null, onGesture, lockedAbilities = 
           data-gw-ability="dash"
           data-locked={isLocked("dash") ? "1" : undefined}
           data-low={energy < ab.dash.cost ? "1" : undefined}
+          data-burn={
+            burnPromptVisible(hud?.assist.window ?? false, hud?.dashCd ?? 0, energy, isLocked("dash")) ? "1" : undefined
+          }
           style={{ ["--p" as string]: isLocked("dash") ? 0 : cd(hud?.dashCd, hud?.dashMax) }}
           onPointerDown={isLocked("dash") ? undefined : press("dash")}
         >

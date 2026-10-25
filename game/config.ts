@@ -3,7 +3,7 @@
 //
 // Units: world units (u), seconds (s). One fixed physics step is CONFIG.dt seconds.
 
-import type { Difficulty } from "./types"
+import type { AssistTier, Difficulty } from "./types"
 
 export interface DifficultyProfile {
   /** Number of rival bots in the round. */
@@ -18,6 +18,11 @@ export interface DifficultyProfile {
   caution: number
   /** Whether bots use the pull ability. */
   usesPull: boolean
+  /**
+   * Multiplier on the gravity-assist dash window (see CONFIG.assist.window). Easier difficulties
+   * are more forgiving about dash timing; the reward itself is identical on every difficulty.
+   */
+  assistWindowMul: number
   /** Bots never thrust harder than this fraction of full intent (a handicap on easy). */
   thrustScale: number
   /** Radians of random aim error added on each decision. */
@@ -273,12 +278,72 @@ export const CONFIG = {
      * A body earns a slingshot when, after a step, it is within band * well.radius + 60 of a
      * well's centre, moving faster than minSpeedMul * maxSpeed(mass), and slingCd == 0.
      * Reward: energy and Singularity charge; then slingCd = cooldown.
+     *
+     * This stays the small "fast pass" perk it has always been. Movement progression comes from
+     * CONFIG.assist below, which requires a real flyby and a timed dash.
      */
     minSpeedMul: 1.15,
     band: 4,
     energy: 12,
     ult: 0.08,
     cooldown: 3,
+  },
+
+  /**
+   * Gravity assist ("Oberth burn") — the skill reward for a real flyby.
+   *
+   * A pass opens whenever a body is inside a well's assist band and closing on it in the well's
+   * own frame (radial speed <= -minInbound), whether it entered the band or was already inside;
+   * leaving the band drops the pass, so there is no re-entry bonus. Periapsis is where that radial
+   * speed flips positive; a PROGRADE (or tangential) dash pressed within `window` of it, scaled by
+   * the difficulty's assistWindowMul, is the burn — a retrograde dash never is. The burn is graded
+   * by how deep the periapsis was and how fast the body moved relative to the well (so a moving well
+   * contributes its own velocity), and pays a short speed surge.
+   *
+   * Simplified game physics, deliberately: wells are point masses with softened Newtonian
+   * gravity, periapsis is sampled at the fixed step, and the "Oberth effect" is a graded reward
+   * rather than a simulated frame-dependent burn. Nothing here is relativistic.
+   */
+  assist: {
+    /** Assist band = well.radius * band + margin (u): where a pass is tracked and telegraphed. */
+    band: 9,
+    margin: 80,
+    /** Closing speed relative to the well (u/s) needed to open a pass. */
+    minInbound: 90,
+    /** Periapsis must be inside well.radius * periBand to count as a real flyby. */
+    periBand: 5,
+    /** Minimum speed relative to the well at periapsis (u/s). */
+    minRelSpeed: 220,
+    /** Speed above minRelSpeed that grades as a perfect (1.0) speed score. */
+    speedRange: 320,
+    /** Graded dash window either side of periapsis (s), scaled by difficulty.assistWindowMul. */
+    window: 0.35,
+    /** Seconds a pass may last before it is dropped without reward (anti-hover). */
+    maxPass: 8,
+    /** Seconds before any body may earn another burn. */
+    cooldown: 6,
+    /** Seconds before the same well may pay the same body again. */
+    sameWell: 12,
+    /** Quality bonus for a well that is itself moving: the well's motion did real work. */
+    movingBonus: 0.15,
+    /** Hard caps. Surges never stack past these and a weaker burn never downgrades a live surge. */
+    maxSpeedMul: 1.3,
+    maxThrustMul: 1.12,
+    /** Reward tiers, lowest `at` (quality 0..1) first. */
+    tiers: [
+      { at: 0, tier: "graze", energy: 8, ult: 0.05, impulse: 50, surge: 2, speedMul: 1.06, thrustMul: 1.03 },
+      { at: 0.45, tier: "burn", energy: 14, ult: 0.1, impulse: 90, surge: 3, speedMul: 1.14, thrustMul: 1.07 },
+      { at: 0.72, tier: "oberth", energy: 22, ult: 0.16, impulse: 140, surge: 4, speedMul: 1.24, thrustMul: 1.1 },
+    ] as const satisfies readonly {
+      at: number
+      tier: AssistTier
+      energy: number
+      ult: number
+      impulse: number
+      surge: number
+      speedMul: number
+      thrustMul: number
+    }[],
   },
 
   powerups: {
@@ -386,6 +451,7 @@ export const CONFIG = {
       aggression: 0.55,
       caution: 0.6,
       usesPull: false,
+      assistWindowMul: 1.4,
       thrustScale: 0.8,
       noise: 0.35,
       startMassScale: [0.8, 1.0],
@@ -400,6 +466,7 @@ export const CONFIG = {
       aggression: 0.9,
       caution: 0.85,
       usesPull: true,
+      assistWindowMul: 1,
       thrustScale: 0.92,
       noise: 0.18,
       startMassScale: [0.9, 1.1],
@@ -413,6 +480,7 @@ export const CONFIG = {
       aggression: 1,
       caution: 1,
       usesPull: true,
+      assistWindowMul: 0.75,
       thrustScale: 1,
       noise: 0.06,
       startMassScale: [1.0, 1.2],

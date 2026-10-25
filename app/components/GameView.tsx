@@ -214,6 +214,7 @@ export function GameView(props: GameViewProps) {
         dpr: Math.min(window.devicePixelRatio || 1, 2),
         reducedMotion: mq("(prefers-reduced-motion: reduce)"),
         layout: curLayout,
+        dashLocked: (propsRef.current.lockedAbilities ?? locked).includes("dash"),
         ...(demo ? { demo: true } : {}),
       }
     }
