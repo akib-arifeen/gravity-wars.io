@@ -29,6 +29,11 @@ import { shareCard, shareOrCopy } from "@/game/share"
 import { ARENAS } from "@/game/arenas"
 import type { InputController } from "@/game/input"
 import type { ArenaId, BodyStats, Difficulty, GameMode, HudSnapshot, RoundResult } from "@/game/types"
+import { ChallengeApiError, createChallengeClient, resolveChallengeBase } from "./challenge/api"
+import { requestIssuedRun } from "./challenge/issue"
+import { configFromDescriptor, createChallengeRun, noteRunResult, type ChallengeRun } from "./challenge/run"
+import { submitChallengeRun, type SubmitState } from "./challenge/submit"
+import { challengeView } from "./challenge/view"
 import { GameView, type Notice, type RunFacts } from "./components/GameView"
 import { Hud } from "./components/Hud"
 import { ProfilePanel } from "./components/Profile"
@@ -44,6 +49,7 @@ import {
   type DailyView,
   type MenuMode,
 } from "./components/Screens"
+import type { ChallengeMenuModel } from "./components/Challenge"
 import { Toasts, type ToastItem } from "./components/Toasts"
 import { ARENA_KEY, DIFFICULTY_KEY, hasPlayHistory, startDefaults } from "./startDefaults"
 
@@ -71,7 +77,26 @@ function newSeed(): number {
   return (Date.now() + Math.floor(Math.random() * 1000003)) % 2147483647
 }
 
+function challengeErrorText(error: unknown): string {
+  if (error instanceof ChallengeApiError) return `${error.message} (${error.code})`
+  return "Could not reach the local challenge server."
+}
+
 const FIRST_RUN = startDefaults({})
+
+/**
+ * The verified-run experiment: a local challenge server, off unless
+ * NEXT_PUBLIC_GW_CHALLENGE_API names a loopback API at build time. A default build has no base
+ * and no client, so the page renders no extra UI and makes no request.
+ */
+const CHALLENGE = resolveChallengeBase(process.env.NEXT_PUBLIC_GW_CHALLENGE_API)
+const CHALLENGE_CLIENT = CHALLENGE.base === null ? null : createChallengeClient({ base: CHALLENGE.base })
+const CHALLENGE_HOST = CHALLENGE.base === null ? "" : new URL(CHALLENGE.base).host
+
+interface ChallengeIssue {
+  phase: "idle" | "pending" | "error"
+  message: string
+}
 
 /**
  * Apply the stored menu choices in the same commit that hydrates, before the browser paints it, so
@@ -113,6 +138,10 @@ export default function Page() {
   const [layout, setLayout] = useState<"desktop" | "touch">("desktop")
   const [demoSeed, setDemoSeed] = useState(7)
   const [sfx, setSfx] = useState<Sfx | null>(null)
+  const [challengeAssisted, setChallengeAssisted] = useState(false)
+  const [challengeIssue, setChallengeIssue] = useState<ChallengeIssue>({ phase: "idle", message: "" })
+  const [challengeRun, setChallengeRun] = useState<ChallengeRun | null>(null)
+  const [challengeSubmit, setChallengeSubmit] = useState<SubmitState>({ phase: "idle" })
 
   const sfxRef = useRef<Sfx | null>(null)
   const inputRef = useRef<InputController | null>(null)
@@ -121,6 +150,10 @@ export default function Page() {
   const toastKey = useRef(0)
   const topRef = useRef<boolean | null>(null)
   const lastLeadToast = useRef(0)
+  // Bumped by every beginRound, so a descriptor that arrives later can tell a round happened.
+  const roundSeq = useRef(0)
+  // Token of the newest descriptor request; only the newest may touch the issue state.
+  const challengeRequest = useRef(0)
   const state = useRef({
     screen,
     difficulty,
@@ -139,6 +172,7 @@ export default function Page() {
     dailyConfig,
     dailyRunConfig,
     outcome,
+    challengeRun,
   })
   state.current = {
     screen,
@@ -158,6 +192,7 @@ export default function Page() {
     dailyConfig,
     dailyRunConfig,
     outcome,
+    challengeRun,
   }
 
   useEffect(() => setDemoSeed(newSeed()), [])
@@ -321,14 +356,26 @@ export default function Page() {
 
   // Start a round with the given engine mode, arena, difficulty and end-screen context.
   const beginRound = useCallback(
-    (opts: { mode: GameMode; arena: ArenaId; difficulty: Difficulty; kind: RunKind; seed?: number; level?: CampaignLevel | null }) => {
+    (opts: {
+      mode: GameMode
+      arena: ArenaId
+      difficulty: Difficulty
+      kind: RunKind
+      seed?: number
+      level?: CampaignLevel | null
+      /** A verified run to record; every other round clears it so nothing is ever recorded into it. */
+      challenge?: ChallengeRun | null
+    }) => {
       const progress = state.current.campaignProgress
       const unlockedNow = unlockedAbilities(progress)
+      roundSeq.current += 1
       setRoundMode(opts.mode)
       setRoundArena(opts.arena)
       setRoundDifficulty(opts.difficulty)
       setRunKind(opts.kind)
       setRoundLevel(opts.level ?? null)
+      setChallengeRun(opts.challenge ?? null)
+      setChallengeSubmit({ phase: "idle" })
       setRoundLocked(
         opts.kind === "campaign" ? ABILITY_UNLOCKS.filter((a) => unlockedNow.indexOf(a.id) < 0).map((a) => a.id) : [],
       )
@@ -366,6 +413,55 @@ export default function Page() {
     setDailyRunConfig(config)
     beginRound({ mode: "round", arena: config.arena, difficulty: config.difficulty, kind: "daily", seed: config.seed })
   }, [beginRound])
+
+  // Verified run: ask the local server for the daily descriptor and play exactly what it issued.
+  // The client never picks the seed, arena, skill or ruleset. The request carries the request
+  // token and the round generation it was made in: if the player starts a round or changes mode
+  // while it is in flight, the answer is dropped instead of replacing what they chose.
+  const startVerifiedRun = useCallback(() => {
+    const client = CHALLENGE_CLIENT
+    if (!client || challengeIssue.phase === "pending") return
+    const request = ++challengeRequest.current
+    const round = roundSeq.current
+    // The debug autopilot is an assist, and assisted has to be declared when the run is issued.
+    const autopilot = typeof window !== "undefined" && window.__gw?.autopilot === true
+    setChallengeIssue({ phase: "pending", message: "" })
+    void requestIssuedRun(client, challengeAssisted || autopilot, request, round, () => ({
+      latestRequest: challengeRequest.current,
+      latestRound: roundSeq.current,
+      screen: state.current.screen,
+      mode: state.current.mode,
+    })).then((outcome) => {
+      // A newer request owns the pending state; an older answer must not touch it.
+      if (outcome.kind === "superseded") return
+      if (outcome.kind !== "issued") {
+        setChallengeIssue(
+          outcome.kind === "failed"
+            ? { phase: "error", message: challengeErrorText(outcome.error) }
+            : { phase: "idle", message: "" },
+        )
+        return
+      }
+      const descriptor = outcome.descriptor
+      setDailyRunConfig(configFromDescriptor(descriptor))
+      setChallengeIssue({ phase: "idle", message: "" })
+      beginRound({
+        mode: "round",
+        arena: descriptor.challenge.arena,
+        difficulty: descriptor.challenge.difficulty,
+        kind: "daily",
+        seed: descriptor.challenge.seed,
+        challenge: createChallengeRun(descriptor),
+      })
+    })
+  }, [beginRound, challengeAssisted, challengeIssue.phase])
+
+  // Retry the same submission: the run keeps its idempotency key, so this cannot score twice.
+  const retryChallengeSubmit = useCallback(() => {
+    const run = state.current.challengeRun
+    if (!run || !CHALLENGE_CLIENT) return
+    void submitChallengeRun(run, CHALLENGE_CLIENT, setChallengeSubmit)
+  }, [])
 
   // The menu's Play button: whichever mode is selected.
   const play = useCallback(() => {
@@ -487,6 +583,13 @@ export default function Page() {
       const rec = recordDailyRun(state.current.dailyProgress, config, score)
       setDailyProgress(rec.progress)
       saveDaily(storageRef.current, rec.progress)
+      // A verified run submits the recording this round produced; nothing is claimed until the
+      // round's own peak mass is known, and the server's replayed score is the one that counts.
+      const run = state.current.challengeRun
+      if (run && CHALLENGE_CLIENT) {
+        noteRunResult(run, stats)
+        void submitChallengeRun(run, CHALLENGE_CLIENT, setChallengeSubmit)
+      }
       setOutcome({
         result,
         stats,
@@ -594,6 +697,36 @@ export default function Page() {
   const dailyView: DailyView | null = dailyConfig
     ? { config: dailyConfig, best: today?.best ?? 0, streak: dailyStreak(dailyProgress, dailyConfig.key), runs: today?.runs ?? 0 }
     : null
+  // The experimental block: nothing at all unless a loopback challenge API was configured, and a
+  // refused base is shown disabled rather than silently hidden.
+  const challengeMenu: ChallengeMenuModel | null =
+    CHALLENGE.enabled && CHALLENGE.base !== null
+      ? {
+          host: CHALLENGE_HOST,
+          disabledReason: null,
+          assisted: challengeAssisted,
+          busy: challengeIssue.phase === "pending",
+          error: challengeIssue.phase === "error" ? challengeIssue.message : null,
+          onAssisted: setChallengeAssisted,
+          onStart: startVerifiedRun,
+        }
+      : CHALLENGE.reason === null
+        ? null
+        : {
+            host: "",
+            disabledReason: CHALLENGE.reason,
+            assisted: false,
+            busy: false,
+            error: null,
+            onAssisted: noop,
+            onStart: noop,
+          }
+  // A verified run records only a plain Round world: no campaign level, so no boss or relic path.
+  const challengeTrace = runKind === "daily" && roundLevel === null ? (challengeRun?.trace ?? null) : null
+  const challengeEnd =
+    challengeRun !== null && runKind === "daily"
+      ? { view: challengeView(challengeSubmit), onRetry: retryChallengeSubmit }
+      : null
   const skin = allRelicsFound(campaignProgress) ? SKIN_COLOR : undefined
   const campaignHud =
     runKind === "campaign" && roundLevel
@@ -659,6 +792,7 @@ export default function Page() {
           onPauseRequest={requestPause}
           onGesture={unlock}
           onLayout={setLayout}
+          trace={challengeTrace}
         />
       )}
       {(screen === "playing" || screen === "paused") && (
@@ -699,6 +833,7 @@ export default function Page() {
           }}
           campaignProgress={campaignProgress}
           daily={dailyView}
+          challenge={challengeMenu}
         />
       )}
       {screen === "menu" && showProfile && (
@@ -718,6 +853,7 @@ export default function Page() {
           campaign={outcome.campaign ?? undefined}
           onNextLevel={playNextLevel}
           daily={outcome.daily ?? undefined}
+          challenge={challengeEnd}
           onShare={() => void shareOutcome()}
         />
       )}

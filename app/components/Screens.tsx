@@ -20,6 +20,8 @@ import {
 import type { DailyConfig } from "@/game/daily"
 import { CONFIG } from "@/game/config"
 import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, RoundResult } from "@/game/types"
+import type { ChallengeView } from "@/app/challenge/view"
+import { ChallengeMenuBlock, ChallengeStatus, type ChallengeMenuModel } from "./Challenge"
 import { AbilityIcon, LockIcon, StarIcon } from "./Icons"
 import { BURN_TIP } from "./hudView"
 import { radioTabStop, radioTarget } from "./radioNav"
@@ -253,6 +255,8 @@ interface MenuProps {
   campaignProgress: CampaignProgress
   /** Today's daily challenge and the local record for it. */
   daily: DailyView | null
+  /** Verified runs against a configured local server; null (the default) renders nothing. */
+  challenge?: ChallengeMenuModel | null
   /** False while another panel (stats) is open on top: the menu keys then do nothing. */
   active?: boolean
 }
@@ -274,6 +278,7 @@ export function MenuScreen({
   onCampaignLevel,
   campaignProgress,
   daily,
+  challenge = null,
   active = true,
 }: MenuProps) {
   const [best, setBest] = useState<BestMap>({})
@@ -459,6 +464,7 @@ export function MenuScreen({
               </div>
               <p className="gw-daily-seed">Seed {daily ? daily.config.seed : "-"}</p>
             </div>
+            {challenge && <ChallengeMenuBlock model={challenge} />}
           </>
         ) : (
           <>
@@ -652,6 +658,8 @@ interface EndProps {
   onNextLevel?(): void
   /** Daily only: the run's score and the local record. */
   daily?: DailyOutcome
+  /** Verified run only: the submission state and its retry. */
+  challenge?: { view: ChallengeView; onRetry(): void } | null
   /** Share the result (Web Share / clipboard). */
   onShare?(): void
 }
@@ -671,7 +679,7 @@ function reasonLine(r: RoundResult): string {
   return "Round over"
 }
 
-export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked, campaign, onNextLevel, daily, onShare }: EndProps) {
+export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked, campaign, onNextLevel, daily, challenge, onShare }: EndProps) {
   const ref = useRef<HTMLButtonElement>(null)
   const shareRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -757,6 +765,8 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked, campai
             <p className="gw-daily-seed">{daily.key}</p>
           </div>
         )}
+
+        {challenge && <ChallengeStatus view={challenge.view} onRetry={challenge.onRetry} />}
 
         {!campaign && !daily && <p className="gw-reason">{reasonLine(result)}</p>}
         {campaign && !campaign.goalMet && <p className="gw-reason">{reasonLine(result)}</p>}

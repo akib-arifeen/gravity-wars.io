@@ -23,7 +23,7 @@ import {
   type IdempotencyRow,
   type SubmissionRow,
 } from "./db.ts"
-import { HttpError, errorResponse, json, readJsonBody, structuredError, structuredLog } from "./http.ts"
+import { HttpError, errorResponse, corsHeaders, isLoopbackOrigin, json, readJsonBody, structuredError, structuredLog } from "./http.ts"
 import { RATE_RULES, rateHeaders, takeRateLimit } from "./rate.ts"
 import { ReplayError, replayDailyRun, type ReplayOutcome } from "./replay.ts"
 import { decodeSubmissionTrace, parseIssueInput, parseSubmissionBinding, type SubmissionBinding } from "./validate.ts"
@@ -59,6 +59,9 @@ export async function handle(request: Request, env: Env, options: HandlerOptions
     }
   }
   response.headers.set("x-request-id", requestId)
+  for (const [name, value] of Object.entries(corsHeaders(request.headers.get("origin")))) {
+    response.headers.set(name, value)
+  }
   structuredLog("request", {
     requestId,
     method: request.method,
@@ -77,6 +80,15 @@ async function route(
   requestId: string,
 ): Promise<Response> {
   const path = url.pathname.replace(/\/+$/, "") || "/"
+  // Local development serves the game from another port, so a loopback page needs a preflight.
+  // Anything else keeps the previous behaviour: no CORS headers, no extra routes.
+  if (request.method === "OPTIONS") {
+    if (!isLoopbackOrigin(request.headers.get("origin"))) {
+      throw new HttpError(403, "CORS_FORBIDDEN", "Cross-origin requests are only allowed from loopback origins")
+    }
+    if (!path.startsWith("/v1/")) throw new HttpError(404, "NOT_FOUND", "Unknown endpoint")
+    return new Response(null, { status: 204, headers: corsHeaders(request.headers.get("origin")) })
+  }
   if (path === "/v1/health") {
     requireMethod(request, ["GET"])
     return health(env, now)

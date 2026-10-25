@@ -1,8 +1,9 @@
 # Daily challenge backend (local foundation)
 
 A local-only Cloudflare Worker for daily challenge runs. It is **not deployed**, creates no remote
-resources, and the static game does not call it yet. The game bundle, its behaviour and its build
-are unchanged; the only shared additions are the replay trace codec and a ruleset version.
+resources, and the static game only calls it from an experimental, build-time-gated client that is
+off by default. A normal build is unchanged; the shared additions are the replay trace codec, a
+ruleset version and the client modules under `app/challenge/`.
 
 The Worker uses `cf` and `cloudflare.config.ts`. There is no Wrangler configuration.
 
@@ -24,6 +25,8 @@ Shared with the client:
 - `game/runTrace.ts` — versioned base64url intent trace.
 - `game/daily.ts` — `DAILY_RULESET_VERSION`. Bump it when engine, config, arena, bot or trace
   behaviour changes a replayed round.
+- `app/challenge/` — the experimental verified-run client (see below). It is only built into a page
+  that sets `NEXT_PUBLIC_GW_CHALLENGE_API`.
 
 ## Lifecycle
 
@@ -99,6 +102,14 @@ padded or truncated.
 ## API
 
 All responses are JSON, `cache-control: no-store`, with `x-request-id`.
+
+Cross-origin requests are answered only for loopback pages (`http://localhost:<port>`,
+`http://127.0.0.1:<port>`, `http://[::1]:<port>`), because local development serves the static
+game from another port. Those responses carry `access-control-allow-origin`, allow
+`content-type` and `idempotency-key`, and expose `idempotent-replay`, `x-request-id`,
+`server-timing` and `retry-after`. Every other origin gets no CORS headers, and its preflight is
+refused with 403 `CORS_FORBIDDEN`. The deployed game origin is a production decision and is not
+covered by this.
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -199,14 +210,62 @@ Requires Node 22.18+ for `cf`. `cf` 1.0.0-beta.21 declares Node `^22.23 || ^24.2
 this was verified on Node 25.8 with an npm engine warning. Its bundled workerd is 2026-10-19, so
 `compatibilityDate` is pinned to that date; raise it with the next `cf` upgrade.
 
+## Local verified-run client (experimental, off by default)
+
+The static game can play and submit a verified daily run against this Worker. It is opt-in at
+build time and only accepts a loopback API base, so a normal build and any deployed site make no
+request and show no extra UI:
+
+```sh
+NEXT_PUBLIC_GW_CHALLENGE_API=http://localhost:5173 npm run build
+npx serve@14 out            # or any static server, e.g. http://localhost:3000
+cd backend && cf dev        # the API on http://localhost:5173
+```
+
+In the **Daily** panel the page then shows a **Verified run** block (marked local · experimental).
+Starting one issues a descriptor and plays exactly its `date`, `seed`, `arena`, `difficulty` and
+`rulesetVersion`; the client chooses none of them. During the round `GameView` records one player
+intent per fixed `step()` — the intent the engine actually receives, after the campaign ability
+filter, with a zero intent for any step where the player is not alive — so the entry count matches
+the server's replay exactly. A campaign level never carries a trace, so no boss or relic path is
+involved.
+
+The end screen shows the submission as pending, then one of:
+
+- **Replay-verified**, with the server's replayed score and, for a ranked run, the server's rank;
+- **Assisted — stored but never ranked**, when the descriptor declared `assisted`;
+- **Submission failed**, with the server's code and a retry button for transport, 429 and 5xx.
+
+The retry reuses the run's single `Idempotency-Key` and a byte-identical body, so it can only
+return the stored answer. Two runs are never submitted: one whose round never ended, and one flown
+by the debug autopilot while issued as unassisted (`assisted` must be declared before the run, so
+the client asks for an assisted descriptor when it starts with the autopilot on). The client claims
+only its own peak mass, and every score and rank it displays comes from the response; it shows no
+global rank, because this board is one local D1 database.
+
+`test/local-e2e.test.ts` is the synthetic end-to-end check. It issues a descriptor, plays that
+round with the game's own bot brain, submits the trace through the real HTTP API, retries the
+identical request and expects the stored answer:
+
+```sh
+cd backend && cf dev
+GW_E2E_BASE=http://localhost:5173 npx vitest run backend/test/local-e2e.test.ts
+```
+
+Without `GW_E2E_BASE` the file is skipped, so the ordinary suite needs no running server.
+
 ## Production rollout gates (not done)
 
 1. **Remote resource and secrets.** Create the D1 database, set `GW_D1_DATABASE_ID` for the
    production build, set the `ACTOR_HASH_KEY` secret, apply migrations remotely, and decide
    retention for `rate_limits` and `idempotency_keys`. No remote resource exists today.
-2. **Client wiring.** Fetch the descriptor, use its seed/arena/difficulty, record every fixed
-   step with `TraceRecorder`, submit with a stable idempotency key, retry on network failure and
-   declare assisted runs honestly. The static game does none of this yet.
+2. **Client wiring (local only; done for the local path).** The static game can fetch the
+   descriptor, play its seed/arena/difficulty, record every fixed step, submit with a stable
+   idempotency key and retry, and declare assisted runs honestly. That client is off unless
+   `NEXT_PUBLIC_GW_CHALLENGE_API` names a loopback API and refuses anything else. Still required
+   before this is real: a CORS decision for the deployed game origin (only loopback is allowed
+   today), a deployed API base the client would accept, and a decision that the static site may
+   talk to a challenge backend at all.
 3. **Cross-engine policy.** Decide whether to rank only V8 clients, run a second engine
    server-side, or use a tolerance/labelling scheme. The measured JSC/V8 divergence above is the
    current blocker for Safari and Firefox submissions.

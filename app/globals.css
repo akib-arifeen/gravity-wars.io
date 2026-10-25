@@ -2225,6 +2225,127 @@ body {
   color: rgba(232, 246, 255, 0.62);
 }
 
+/* Verified run: the local-only experimental block in the Daily panel and on the end screen. */
+.gw-challenge {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(232, 246, 255, 0.04);
+  border: 1px solid rgba(232, 246, 255, 0.14);
+}
+
+.gw-challenge-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.gw-challenge-kicker {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #e8f6ff;
+}
+
+.gw-challenge-tag {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(232, 246, 255, 0.55);
+}
+
+.gw-challenge-line {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(232, 246, 255, 0.75);
+}
+
+.gw-challenge-headline {
+  margin: 6px 0 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: #e8f6ff;
+}
+
+.gw-challenge-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 0;
+}
+
+.gw-challenge-score strong {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  color: #5ef2ff;
+}
+
+.gw-challenge-score span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(232, 246, 255, 0.6);
+}
+
+.gw-challenge-assist {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: rgba(232, 246, 255, 0.7);
+  cursor: pointer;
+}
+
+.gw-challenge-assist input {
+  width: 16px;
+  height: 16px;
+  accent-color: #5ef2ff;
+  flex: none;
+}
+
+.gw-challenge-start {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.gw-challenge-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #ff9fb2;
+}
+
+.gw-challenge-note {
+  margin: 8px 0 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: rgba(232, 246, 255, 0.5);
+}
+
+.gw-challenge-pending {
+  border-color: rgba(94, 242, 255, 0.4);
+}
+
+.gw-challenge-success {
+  border-color: rgba(94, 242, 255, 0.55);
+  background: rgba(94, 242, 255, 0.06);
+}
+
+.gw-challenge-failure {
+  border-color: rgba(255, 123, 213, 0.45);
+}
+
+@media (max-width: 479px) {
+  .gw-challenge-score strong {
+    font-size: 26px;
+  }
+}
+
 /* Boss bar: top centre, under the HUD centre block. */
 .gw-boss {
   position: absolute;

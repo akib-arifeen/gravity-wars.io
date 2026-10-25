@@ -538,3 +538,60 @@ function hideFirstIdempotencyRead(db: D1Database): D1Database {
     },
   }) as D1Database
 }
+
+describe("local CORS", () => {
+  it("answers a loopback preflight and exposes the retry header to the page", async () => {
+    const { env } = testEnv()
+    const response = await call(
+      env,
+      "/v1/daily/runs/00000000-0000-4000-8000-000000000000/submissions",
+      {
+        method: "OPTIONS",
+        headers: {
+          origin: "http://localhost:3000",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type,idempotency-key",
+        },
+      },
+      FIXED_NOW,
+    )
+    expect(response.status).toBe(204)
+    expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:3000")
+    expect(response.headers.get("access-control-allow-headers")).toContain("idempotency-key")
+    expect(response.headers.get("access-control-expose-headers")).toContain("idempotent-replay")
+    expect(response.headers.get("x-request-id")).toMatch(/[0-9a-f-]{36}/)
+  })
+
+  it("adds the allow-origin header to an ordinary read from a loopback page", async () => {
+    const { env } = testEnv()
+    for (const origin of ["http://127.0.0.1:3000", "http://[::1]:3000"]) {
+      const response = await call(env, "/v1/health", { headers: { origin } }, FIXED_NOW)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("access-control-allow-origin")).toBe(origin)
+    }
+  })
+
+  it("leaves every other origin without CORS headers and refuses its preflight", async () => {
+    const { env } = testEnv()
+    const read = await call(env, "/v1/health", { headers: { origin: "https://gravity-warsio.vercel.app" } }, FIXED_NOW)
+    expect(read.status).toBe(200)
+    expect(read.headers.get("access-control-allow-origin")).toBeNull()
+
+    const preflight = await call(
+      env,
+      "/v1/daily/runs",
+      { method: "OPTIONS", headers: { origin: "https://gravity-warsio.vercel.app" } },
+      FIXED_NOW,
+    )
+    expect(preflight.status).toBe(403)
+    expect(preflight.headers.get("access-control-allow-origin")).toBeNull()
+    expect(await preflight.json()).toMatchObject({ error: { code: "CORS_FORBIDDEN" } })
+  })
+
+  it("still has no CORS headers when a request carries no origin at all", async () => {
+    const { env } = testEnv()
+    const response = await call(env, "/v1/health", {}, FIXED_NOW, "")
+    expect(response.status).toBe(200)
+    expect(response.headers.get("access-control-allow-origin")).toBeNull()
+  })
+})
