@@ -12,6 +12,7 @@ import {
   dashAimedAtBurn,
   emptyAssist,
   grantSurge,
+  invalidatePassOnContact,
   markPaid,
   noteDash,
   noteDashImpulse,
@@ -385,7 +386,9 @@ export function createWorld(opts: CreateWorldOptions): World {
  *       lastHitBy, increment the assister's stats.assists and emit {type:"assist"} after the
  *       death event. Emit {type:"death"}. Stop checking wells for this body.
  *     - solid wells (lethal false): if d < well.radius + radius: move the body out along
- *       n = (body - well)/d (use (1,0) if d == 0) to d = well.radius + radius; vrel = (v - wv)·n;
+ *       n = (body - well)/d (use (1,0) if d == 0) to d = well.radius + radius; the body's flyby
+ *       pass is invalidated (a surface is not a flyby, and the bounce below reverses the radial
+ *       velocity that grading would otherwise read as a periapsis); vrel = (v - wv)·n;
  *       if vrel < 0: v -= (1 + solidRestitution) * vrel * n and, when -vrel > 40, emit
  *       {type:"solidHit", impulse = -(1 + solidRestitution) * vrel * mass}.
  *  7b. Gravity assists (assist.ts): every living body's flyby pass is opened or advanced. A pass
@@ -395,7 +398,9 @@ export function createWorld(opts: CreateWorldOptions): World {
  *      periapsis). A pass pays out (Oberth burn) only if a PROGRADE or tangential dash landed
  *      within the difficulty's window of that periapsis, the periapsis was inside the well's peri
  *      band, the relative speed was high enough, the payout cooldown and same-well lock are clear,
- *      and the pass has not paid. A burn grants energy and Singularity charge, a prograde impulse
+ *      and the pass has not paid. A pass invalidated by a solid contact in step 7 cannot pay: no
+ *      periapsis is recorded for it in that step, so a collision earns nothing even after a dash.
+ *      A burn grants energy and Singularity charge, a prograde impulse
  *      relative to the well, the graded speed surge, stats.oberths += 1, sets slingCd so the legacy
  *      slingshot cannot double-pay, and emits {type:"oberth"}. It does not touch stats.slingshots.
  *      A pass that leaves the band or outlives CONFIG.assist.maxPass is dropped unrewarded.
@@ -1005,6 +1010,9 @@ export function step(world: World, intents: ReadonlyMap<string, Intent> | Readon
           break
         }
       } else if (d < w.radius + b.radius) {
+        // Touching a solid well ends any flyby before step 7b can grade it: the bounce below
+        // reverses the radial velocity, which would otherwise be recorded as a periapsis.
+        invalidatePassOnContact(b)
         const nx = d === 0 ? 1 : dx / d
         const ny = d === 0 ? 0 : dy / d
         const reach = w.radius + b.radius

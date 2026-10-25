@@ -221,6 +221,12 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
   const bossActive = boss !== null && hud?.phase !== "over"
   // The visual bar changes ~4x/s; the status text below changes only when the fight's state does.
   const bossAnnounce = bossActive && boss ? bossAnnouncement(boss) : ""
+  // The accessible equivalent of the dash slot's burn highlight: a real flyby's window is open and
+  // the dash can pay it right now. It flips with the window, not with the 4 Hz bar values.
+  const burnReady = hud
+    ? burnPromptVisible(hud.assist.window, hud.dashCd, hud.energy, lockedAbilities.includes("dash"))
+    : false
+  const srStatus = [bossAnnounce, burnReady ? "Prograde burn window open" : ""].filter(Boolean).join(" ")
 
   return (
     <div className="gw-hud" data-mode={mode} inert={inert}>
@@ -316,7 +322,7 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
           {/* Persistent polite status region: only its text changing announces, and that text
               ignores the 4 Hz mass/health updates. */}
           <p className="gw-sr-only" role="status" aria-live="polite">
-            {bossAnnounce}
+            {srStatus}
           </p>
 
           {ed && hud.leaderboard.length > 0 && (
@@ -342,16 +348,18 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                   key={sl.kind}
                   type="button"
                   className="gw-slot"
-                  aria-label={sl.locked ? `${sl.label} (locked: earn campaign stars to unlock)` : `${sl.label} (${sl.key})`}
+                  aria-label={
+                    sl.locked
+                      ? `${sl.label} (locked: earn campaign stars to unlock)`
+                      : sl.kind === "dash" && burnReady
+                        ? `${sl.label} (${sl.key}), prograde burn window open`
+                        : `${sl.label} (${sl.key})`
+                  }
                   disabled={sl.locked}
                   data-locked={sl.locked ? "1" : undefined}
                   data-low={sl.low ? "1" : undefined}
                   data-ready={sl.kind === "ult" && (ultReady || ultActive) ? "1" : undefined}
-                  data-burn={
-                    sl.kind === "dash" && burnPromptVisible(hud.assist.window, hud.dashCd, hud.energy, sl.locked)
-                      ? "1"
-                      : undefined
-                  }
+                  data-burn={sl.kind === "dash" && burnReady ? "1" : undefined}
                   style={{ ["--p" as string]: sl.pct }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPress(sl.kind)}

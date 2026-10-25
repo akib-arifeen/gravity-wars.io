@@ -222,6 +222,8 @@ export function TouchControls({ input, hud = null, onGesture, lockedAbilities = 
   const ultCharge = hud?.ult ?? 0
   const ultReady = ultCharge >= 1
   const ultActive = (hud?.ultActive ?? 0) > 0
+  // Same gate as the visual dash highlight: the HUD only ever answers "is a burn payable now".
+  const burnReady = burnPromptVisible(hud?.assist.window ?? false, hud?.dashCd ?? 0, energy, isLocked("dash"))
 
   const moves: [string, number, number][] = [
     ["Thrust up", 0, -1],
@@ -250,9 +252,7 @@ export function TouchControls({ input, hud = null, onGesture, lockedAbilities = 
           data-gw-ability="dash"
           data-locked={isLocked("dash") ? "1" : undefined}
           data-low={energy < ab.dash.cost ? "1" : undefined}
-          data-burn={
-            burnPromptVisible(hud?.assist.window ?? false, hud?.dashCd ?? 0, energy, isLocked("dash")) ? "1" : undefined
-          }
+          data-burn={burnReady ? "1" : undefined}
           style={{ ["--p" as string]: isLocked("dash") ? 0 : cd(hud?.dashCd, hud?.dashMax) }}
           onPointerDown={isLocked("dash") ? undefined : press("dash")}
         >
@@ -302,12 +302,15 @@ export function TouchControls({ input, hud = null, onGesture, lockedAbilities = 
         </button>
         {abilities.map((a) => {
           const locked = isLocked(a.kind)
+          const burnCue = a.kind === "dash" && burnReady ? ", prograde burn window open" : ""
           return (
             <button
               key={a.kind}
               type="button"
               aria-disabled={locked || undefined}
-              aria-label={locked ? `${a.name} (locked: earn campaign stars to unlock)` : a.name}
+              aria-label={
+                locked ? `${a.name} (locked: earn campaign stars to unlock)` : `${a.name}${burnCue}`
+              }
               onClick={() => {
                 if (!locked) input.press(a.kind)
               }}

@@ -19,6 +19,7 @@ export interface LifetimeStats {
   debris: number
   comets: number
   slingshots: number
+  oberths: number
   dashes: number
   repulses: number
   ults: number
@@ -129,6 +130,7 @@ export function emptyProfile(): Profile {
       debris: 0,
       comets: 0,
       slingshots: 0,
+      oberths: 0,
       dashes: 0,
       repulses: 0,
       ults: 0,
@@ -307,7 +309,7 @@ export function trackStep(profile: Profile, tracker: RoundTracker, world: World,
 
 /**
  * Fold a finished round into the lifetime stats (rounds, wins, per-difficulty/arena counts,
- * absorbs/debris/comets/slingshots/dashes/repulses/ults/assists/pickups from the player's
+ * absorbs/debris/comets/slingshots/oberths/dashes/repulses/ults/assists/pickups from the player's
  * BodyStats, bestMass from peakMass, topSpeed, timePlayed += result.durationS) and unlock the
  * round-end achievements. Returns the newly unlocked defs (ACHIEVEMENTS order). Mutates profile.
  */
@@ -334,6 +336,7 @@ export function finishRound(profile: Profile, tracker: RoundTracker, world: Worl
   st.debris += ps.debrisEaten
   st.comets += ps.comets
   st.slingshots += ps.slingshots
+  st.oberths += ps.oberths
   st.dashes += ps.dashes
   st.repulses += ps.repulses
   st.ults += ps.ults
@@ -364,14 +367,14 @@ export function finishRound(profile: Profile, tracker: RoundTracker, world: Worl
 
 /** What an Endless fold has already added to the profile, so a later fold adds only the difference. */
 export type EndlessFold = Readonly<
-  Record<"time" | "rivalsAbsorbed" | "debrisEaten" | "comets" | "slingshots" | "dashes" | "repulses" | "ults" | "assists" | "pickups", number>
+  Record<"time" | "rivalsAbsorbed" | "debrisEaten" | "comets" | "slingshots" | "oberths" | "dashes" | "repulses" | "ults" | "assists" | "pickups", number>
 >
 
 /**
  * Fold an Endless session into the lifetime stats. Safe to call repeatedly (hidden tab, page
  * hide, quit): pass the value returned by the previous call as `since` and only the difference
  * is added, so nothing is counted twice. Adds timePlayed (world.time), the player's cumulative
- * BodyStats (absorbs, debris, comets, slingshots, dashes, repulses, ults, assists, pickups) and
+ * BodyStats (absorbs, debris, comets, slingshots, oberths, dashes, repulses, ults, assists, pickups) and
  * folds the maxima (endlessBest from world.endless.best, bestMass from peakMass, topSpeed). Does
  * not count a round or a win. Mutates profile; returns the snapshot to pass next time.
  */
@@ -384,6 +387,7 @@ export function finishEndlessSession(profile: Profile, world: World, tracker: Ro
     debrisEaten: ps.debrisEaten,
     comets: ps.comets,
     slingshots: ps.slingshots,
+    oberths: ps.oberths,
     dashes: ps.dashes,
     repulses: ps.repulses,
     ults: ps.ults,
@@ -396,6 +400,7 @@ export function finishEndlessSession(profile: Profile, world: World, tracker: Ro
   st.debris += d("debrisEaten")
   st.comets += d("comets")
   st.slingshots += d("slingshots")
+  st.oberths += d("oberths")
   st.dashes += d("dashes")
   st.repulses += d("repulses")
   st.ults += d("ults")

@@ -620,6 +620,7 @@ export function EndScreen({ result, stats, onPlayAgain, onQuit, unlocked, campai
     ["Crystals", String(stats.crystals)],
     ["Time survived", formatTime(result.durationS)],
     ["Slingshots", String(stats.slingshots)],
+    ["Oberths", String(stats.oberths)],
     ["Assists", String(stats.assists)],
     ["Pickups", String(stats.pickups)],
   ]

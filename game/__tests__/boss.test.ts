@@ -1,7 +1,7 @@
 // Boss encounters: encounter construction, the telegraph/attack state machine, the Leviathan's
 // split and the Twin Pulsars set piece. No DOM: a World plus the pure boss module.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   BOSS_SPECS,
   applyCampaignLevel,
@@ -22,6 +22,11 @@ import { CAMPAIGN_LEVELS, levelById } from "../campaign"
 import { CONFIG } from "../config"
 import { createWorld, step } from "../engine"
 import type { Body, Intent, World } from "../types"
+
+// The set pieces below simulate several minutes of fixed steps. They are not slow on their own, but
+// a loaded machine can push one past the 5 s default, so this file asks for a realistic ceiling
+// instead of the global default being raised for every quick test.
+vi.setConfig({ testTimeout: 30000 })
 
 const DT = CONFIG.dt
 

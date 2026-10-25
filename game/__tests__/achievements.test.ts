@@ -441,6 +441,7 @@ describe("finishRound: round-end achievements", () => {
     s.rivalsAbsorbed = 2
     s.comets = 2
     s.slingshots = 3
+    s.oberths = 2
     s.dashes = 5
     s.repulses = 4
     s.ults = 1
@@ -457,6 +458,7 @@ describe("finishRound: round-end achievements", () => {
       debris: 40,
       comets: 2,
       slingshots: 3,
+      oberths: 2,
       dashes: 5,
       repulses: 4,
       ults: 1,

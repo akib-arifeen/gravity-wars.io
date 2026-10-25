@@ -900,6 +900,7 @@ describe("achievements: apex, survivor, endlessBest", () => {
     ps.debrisEaten = 30
     ps.comets = 1
     ps.slingshots = 2
+    ps.oberths = 1
     ps.dashes = 6
     ps.repulses = 3
     ps.ults = 1
@@ -915,6 +916,7 @@ describe("achievements: apex, survivor, endlessBest", () => {
       debris: 30,
       comets: 1,
       slingshots: 2,
+      oberths: 1,
       dashes: 6,
       repulses: 3,
       ults: 1,

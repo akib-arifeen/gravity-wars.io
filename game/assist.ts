@@ -1,9 +1,10 @@
 // Gravity assist ("Oberth burn"): flyby tracking, grading and the earned speed surge.
 //
 // Pure and deterministic: reads bodies/wells and the fixed step's time, never RNG, DOM or audio.
-// The engine calls tickAssist() every step, noteDash() when a dash actually fires, and
-// trackPass() after the well step; it applies the reward itself (energy, ult, velocity) so the
-// side effects stay in one place.
+// The engine calls tickAssist() every step, noteDash() when a dash actually fires,
+// invalidatePassOnContact() when a body touches a solid well, and trackPass() after the well
+// step; it applies the reward itself (energy, ult, velocity) so the side effects stay in one
+// place.
 //
 // The model is deliberately simplified game physics: a well is a point mass with softened
 // Newtonian gravity, periapsis is sampled once per fixed step, and the "Oberth effect" is a
@@ -89,6 +90,18 @@ export function resetPass(a: AssistState): void {
   p.periDist = 0
   p.periRelSpeed = 0
   p.paid = false
+}
+
+/**
+ * A solid surface contact ends the flyby. The bounce reverses the body's radial velocity in the
+ * same step, and a pass that kept running would read that reversal as a periapsis and grade it —
+ * a reward for crashing. The engine calls this on the contact step, before trackPass, so a
+ * collision can neither create nor complete a payable periapsis. Only the pass is dropped: the
+ * bounce physics, the payout cooldown, the same-well lock and any live surge are untouched, and a
+ * later approach that clears the band on the way in can still open a genuine pass.
+ */
+export function invalidatePassOnContact(body: Body): void {
+  resetPass(body.assist)
 }
 
 /** Reset everything (respawn, death, a body leaving play). */
