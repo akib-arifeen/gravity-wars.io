@@ -40,7 +40,8 @@ Shared with the client:
    is rejected with 409 `RULESET_MISMATCH`, not replayed under today's rules.
 6. The leaderboard is derived from stored submissions; there is no separate score table. It
    resolves the stored league for the requested date, so older ruleset results remain readable
-   within the 31-day window.
+   within the 31-day window. If a date has more than one stored ruleset, the highest version owns
+   the board; earlier versions are not mixed in.
 
 Only the SHA-256 digests of the nonce and token are stored. The token is returned once, in the
 descriptor, and is compared in constant time at submission.
@@ -214,6 +215,13 @@ this was verified on Node 25.8 with an npm engine warning. Its bundled workerd i
    production; consider shorter maximum rounds or an optimised replay path.
 5. **Abuse and availability.** Put rate limiting at the edge too, add CORS for the real game
    origin, consider Turnstile or an account layer, and load-test D1 writes and replay concurrency.
-6. **Privacy review.** `actorHash` is pseudonymous but still linkable; confirm retention and
+6. **Actor identity and dedupe.** There is no auth. `actorHash` is per-IP, so NAT shares a bucket,
+   IPv6 privacy addresses rotate, and a determined client can change IPs. Production needs an
+   IP-independent stable actor id (account or signed install id) and per-actor dedupe before the
+   leaderboard can be more than a local foundation.
+7. **Retention and cleanup.** `rate_limits` and expired `idempotency_keys` are not cleaned up yet.
+   Decide retention and add a bounded scheduled or opportunistic cleanup; this PR adds no standing
+   job.
+8. **Privacy review.** `actorHash` is pseudonymous but still linkable; confirm retention and
    disclosure. Consider dropping it from `submissions` once a real account id exists.
-7. **Deployment approval.** Deploy, merge and remote migrations require explicit approval.
+9. **Deployment approval.** Deploy, merge and remote migrations require explicit approval.
