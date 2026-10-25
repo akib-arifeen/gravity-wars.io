@@ -46,7 +46,10 @@ export function challengeView(state: SubmitState): ChallengeView {
       const { result } = state
       const parts: string[] = []
       if (result.ranked && result.rank !== null) parts.push(`Rank ${result.rank} on this server's board.`)
-      else if (!result.ranked) parts.push(result.assisted ? "Assisted — stored but never ranked." : "Stored unranked.")
+      else if (result.ranked && !result.personalBest) {
+        // The board keeps one row per browser, and this run is not that row.
+        parts.push("A better run of yours holds this board's row, so this run did not place.")
+      } else if (!result.ranked) parts.push(result.assisted ? "Assisted — stored but never ranked." : "Stored unranked.")
       else parts.push("Verified. The server returned no rank.")
       if (state.replayed) parts.push("Re-sent with the same key; this is the stored result.")
       return {

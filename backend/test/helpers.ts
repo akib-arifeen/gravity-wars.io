@@ -12,6 +12,13 @@ import { createTestDb } from "./d1-shim.ts"
 
 export const FIXED_NOW = Date.parse("2026-10-26T12:00:00Z")
 
+/** Two opaque client ids, as a browser would mint them: 128 random bits, hex. */
+export const ACTOR_A = "a1".repeat(16)
+export const ACTOR_B = "b2".repeat(16)
+/** Two request IPs. These only ever reach the rate-limit bucket, never a run or a submission. */
+export const IP_A = "203.0.113.10"
+export const IP_B = "198.51.100.7"
+
 export function migrationSql(): string {
   const path = fileURLToPath(new URL("../migrations/0001_daily_foundation.sql", import.meta.url))
   return readFileSync(path, "utf8")
@@ -86,15 +93,21 @@ export function recordAutopilotRun(league: League): { trace: string; score: numb
   }
 }
 
+/**
+ * One request through the real handler. `ip` and `actorId` are separate on purpose: the first is
+ * the abuse-limit subject, the second is the client's own identity, and no test may confuse them.
+ */
 export async function call(
   env: Env,
   path: string,
   init: RequestInit = {},
   now: number,
-  actor = "203.0.113.10",
+  ip = IP_A,
+  actorId = ACTOR_A,
 ): Promise<Response> {
   const headers = new Headers(init.headers)
-  if (actor) headers.set("cf-connecting-ip", actor)
+  if (ip) headers.set("cf-connecting-ip", ip)
+  if (actorId) headers.set("x-gw-actor", actorId)
   return handle(new Request(`https://daily.test${path}`, { ...init, headers }), env, { now: () => now })
 }
 

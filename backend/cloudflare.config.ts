@@ -1,4 +1,4 @@
-import { bindings, defineConfig } from "cf/config";
+import { bindings, defineConfig, triggers } from "cf/config";
 import * as entrypoint from "./src/index.ts" with { type: "cf-worker" };
 
 /**
@@ -31,6 +31,10 @@ export default defineConfig(({ mode }) => {
         logs: { enabled: true, headSamplingRate: 1 },
         traces: { enabled: true, headSamplingRate: 0.01 },
       },
+      // Hourly retention for rate_limits and expired idempotency keys. Local `cf dev` runs the
+      // handler only when an event is delivered; deploying this schedule is a production decision
+      // (a cron trigger is a remote change) and is not covered by this change.
+      triggers: [triggers.scheduled({ schedule: "17 * * * *" })],
     },
   };
 });

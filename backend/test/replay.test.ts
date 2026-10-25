@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { decodeTrace } from "../../game/runTrace.ts"
 import type { RunTraceStep } from "../../game/runTrace.ts"
 import { MAX_TRACE_STEPS } from "../src/daily.ts"
-import { ReplayError, replayDailyRun } from "../src/replay.ts"
+import { REPLAY_LIMITS, ReplayError, replayDailyRun } from "../src/replay.ts"
 import { leagueForTest, recordAutopilotRun } from "./helpers.ts"
 
 const league = leagueForTest()
@@ -44,6 +44,28 @@ describe("daily replay", () => {
       throw new Error("expected a replay failure")
     } catch (error) {
       expect((error as ReplayError).code).toBe("TRACE_TOO_LONG")
+    }
+  })
+
+  it("publishes one explicit step cap for every arena and honours it", () => {
+    expect(MAX_TRACE_STEPS).toBe(REPLAY_LIMITS.maxSteps)
+    expect(REPLAY_LIMITS.maxReplayMs).toBeGreaterThan(0)
+    // The per-request cap is checkable on its own, independent of the arena's own maximum.
+    const tighter = { ...REPLAY_LIMITS, maxSteps: trace.steps.length - 1 }
+    try {
+      replayDailyRun(league, trace.steps, tighter)
+      throw new Error("expected a replay failure")
+    } catch (error) {
+      expect((error as ReplayError).code).toBe("TRACE_TOO_LONG")
+    }
+  })
+
+  it("stops on its CPU budget instead of replaying anyway", () => {
+    try {
+      replayDailyRun(league, trace.steps, { ...REPLAY_LIMITS, maxReplayMs: -1 })
+      throw new Error("expected a replay failure")
+    } catch (error) {
+      expect((error as ReplayError).code).toBe("REPLAY_BUDGET_EXCEEDED")
     }
   })
 

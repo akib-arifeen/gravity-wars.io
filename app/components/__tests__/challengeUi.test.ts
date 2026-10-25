@@ -95,6 +95,8 @@ describe("verified-run UI", () => {
             claimedScore: 73,
             traceSteps: 9100,
             replayMs: 480,
+            replayCached: false,
+            personalBest: true,
             submittedAt: "2026-10-26T12:04:00.000Z",
             rank: 3,
           },
@@ -139,6 +141,8 @@ describe("verified-run UI", () => {
       claimedScore: 73,
       traceSteps: 9100,
       replayMs: 0,
+      replayCached: false,
+      personalBest: true,
       submittedAt: "2026-10-26T12:04:00.000Z",
       rank: null,
     }

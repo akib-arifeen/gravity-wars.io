@@ -1,8 +1,8 @@
-import { CONFIG } from "../../game/config.ts"
 import { DAILY_RULESET_VERSION, dailyChallenge } from "../../game/daily.ts"
 import { traceByteLength } from "../../game/runTrace.ts"
 import type { ArenaId, Difficulty } from "../../game/types.ts"
 import { randomHex, randomToken, sha256Hex } from "./crypto.ts"
+import { REPLAY_LIMITS } from "./replay.ts"
 
 /**
  * How long a client may take to return a trace. Generous enough for a paused tab, short enough
@@ -10,9 +10,8 @@ import { randomHex, randomToken, sha256Hex } from "./crypto.ts"
  */
 export const RUN_TTL_MS = 2 * 60 * 60 * 1000
 
-/** The longest round the game can produce (the Vast's 1.4x clock plus the countdown). */
-const MAX_ROUND_SECONDS = CONFIG.round.duration * CONFIG.vast.roundMul
-export const MAX_TRACE_STEPS = Math.ceil((MAX_ROUND_SECONDS + CONFIG.round.countdown) / CONFIG.dt) + 2
+/** The longest trace any arena can produce. The replay refuses more than this per request. */
+export const MAX_TRACE_STEPS = REPLAY_LIMITS.maxSteps
 
 const MAX_TRACE_BASE64_CHARS = Math.ceil((traceByteLength(MAX_TRACE_STEPS) * 4) / 3)
 /** Enough for the base64 trace plus the small JSON envelope. */
@@ -30,7 +29,8 @@ export interface League {
 export interface RunRow {
   id: string
   leagueId: string
-  actorHash: string
+  /** The opaque client id the run is bound to. Nothing about the request's network address. */
+  actorId: string
   nonceHash: string
   tokenHash: string
   assisted: boolean
@@ -79,12 +79,13 @@ export function leagueFor(now: Date): League {
 
 /**
  * Mint a run descriptor. The nonce and the submission token are independent random values; only
- * their SHA-256 digests are stored, and the token is returned exactly once, here.
+ * their SHA-256 digests are stored, and the token is returned exactly once, here. `actorId` is the
+ * browser's own opaque id: the run is bound to it, never to the request's IP.
  */
 export async function createRun(
   now: number,
   assisted: boolean,
-  actorHash: string,
+  actorId: string,
 ): Promise<{ descriptor: RunDescriptor; run: RunRow }> {
   const league = leagueFor(new Date(now))
   const runId = crypto.randomUUID()
@@ -95,7 +96,7 @@ export async function createRun(
   const run: RunRow = {
     id: runId,
     leagueId: league.id,
-    actorHash,
+    actorId,
     nonceHash: await sha256Hex(nonce),
     tokenHash: await sha256Hex(token),
     assisted,

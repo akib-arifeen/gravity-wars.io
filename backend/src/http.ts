@@ -89,7 +89,7 @@ export function corsHeaders(origin: string | null): Record<string, string> {
   return {
     "access-control-allow-origin": allowed,
     "access-control-allow-methods": "GET, POST, OPTIONS",
-    "access-control-allow-headers": "content-type, idempotency-key",
+    "access-control-allow-headers": "content-type, idempotency-key, x-gw-actor",
     "access-control-expose-headers": "idempotent-replay, x-request-id, server-timing, retry-after",
     "access-control-max-age": "600",
     vary: "origin",

@@ -8,6 +8,7 @@
 
 import { ARENA_IDS } from "@/game/arenas"
 import type { ArenaId, Difficulty } from "@/game/types"
+import { loadActorId } from "./actor"
 
 /** Build-time setting. Empty (the default) keeps the experimental UI off. */
 export const CHALLENGE_API_ENV = "NEXT_PUBLIC_GW_CHALLENGE_API"
@@ -86,6 +87,13 @@ export interface SubmissionResult {
   claimedScore: number
   traceSteps: number
   replayMs: number
+  /** True when the Worker reused an earlier identical replay for this run instead of replaying. */
+  replayCached: boolean
+  /**
+   * The board keeps one row per browser. False means a better run of this browser holds the row,
+   * so this run has no place of its own and `rank` is null.
+   */
+  personalBest: boolean
   submittedAt: string
   rank: number | null
 }
@@ -127,12 +135,15 @@ export class ChallengeApiError extends Error {
 
 export interface ChallengeClientOptions {
   base: string
+  /** The browser's own opaque id. Called per request; defaults to the stored one. */
+  actorId?: () => string
   fetchImpl?: typeof fetch
   timeoutMs?: number
 }
 
 export function createChallengeClient(options: ChallengeClientOptions): ChallengeClient {
   const base = options.base.replace(/\/+$/, "")
+  const actorId = options.actorId ?? (() => loadActorId())
   const fetchImpl = options.fetchImpl ?? ((...args: Parameters<typeof fetch>) => globalThis.fetch(...args))
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
@@ -142,7 +153,11 @@ export function createChallengeClient(options: ChallengeClientOptions): Challeng
     let response: Response
     let text: string
     try {
-      response = await fetchImpl(`${base}${path}`, { ...init, signal: controller.signal })
+      // Every call carries the browser's own id: the Worker binds a run to it, never to the
+      // address the request arrives from.
+      const headers = new Headers(init.headers)
+      headers.set("x-gw-actor", actorId())
+      response = await fetchImpl(`${base}${path}`, { ...init, headers, signal: controller.signal })
       text = await response.text()
     } catch {
       throw new ChallengeApiError("NETWORK", "The challenge server did not answer.", true)
@@ -286,6 +301,8 @@ function parseSubmission(value: unknown): SubmissionResult {
     claimedScore: whole(body.claimedScore, "claimedScore", 0, 1_000_000_000),
     traceSteps: whole(body.traceSteps, "traceSteps", 1, 10_000_000),
     replayMs: whole(body.replayMs, "replayMs", 0, 10_000_000),
+    replayCached: bool(body.replayCached, "replayCached"),
+    personalBest: bool(body.personalBest, "personalBest"),
     submittedAt: text(body.submittedAt, "submittedAt"),
     rank,
   }

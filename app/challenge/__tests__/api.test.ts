@@ -45,11 +45,16 @@ function submissionBody(overrides: Record<string, unknown> = {}): Record<string,
     claimedScore: 73,
     traceSteps: 9100,
     replayMs: 480,
+    replayCached: false,
+    personalBest: true,
     submittedAt: "2026-10-26T12:04:00.000Z",
     rank: 3,
     ...overrides,
   }
 }
+
+/** The id this test's client presents. The Worker binds a run to it, not to an address. */
+const ACTOR_ID = "ab".repeat(16)
 
 interface Call {
   url: string
@@ -67,7 +72,7 @@ function fakeFetch(replies: (call: Call) => Response | Promise<Response>) {
 }
 
 function client(fetchImpl: typeof fetch, base = "http://localhost:5173") {
-  return createChallengeClient({ base, fetchImpl, timeoutMs: 50 })
+  return createChallengeClient({ base, fetchImpl, timeoutMs: 50, actorId: () => ACTOR_ID })
 }
 
 const jsonResponse = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -114,7 +119,9 @@ describe("descriptor", () => {
     expect(calls).toHaveLength(1)
     expect(calls[0].url).toBe("http://localhost:5173/v1/daily/runs")
     expect(calls[0].init.method).toBe("POST")
-    expect(new Headers(calls[0].init.headers).get("content-type")).toBe("application/json")
+    const issuedHeaders = new Headers(calls[0].init.headers)
+    expect(issuedHeaders.get("content-type")).toBe("application/json")
+    expect(issuedHeaders.get("x-gw-actor")).toBe(ACTOR_ID)
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ assisted: true })
 
     expect(descriptor.challenge).toEqual({
@@ -181,6 +188,7 @@ describe("submission", () => {
     expect(calls[0].url).toBe(`http://localhost:5173/v1/daily/runs/${RUN_ID}/submissions`)
     const headers = new Headers(calls[0].init.headers)
     expect(headers.get("idempotency-key")).toBe("run-key-0001")
+    expect(headers.get("x-gw-actor")).toBe(ACTOR_ID)
     const body = JSON.parse(String(calls[0].init.body))
     expect(Object.keys(body).sort()).toEqual(["assisted", "claimedScore", "nonce", "rulesetVersion", "token", "trace"])
     expect(body).toMatchObject({
@@ -244,12 +252,22 @@ describe("submission", () => {
     }
   })
 
+  it("reads the server's personal-best and cached-replay flags instead of guessing", async () => {
+    const { fetchImpl } = fakeFetch(() =>
+      jsonResponse(submissionBody({ rank: null, personalBest: false, replayCached: true }), 201),
+    )
+    const outcome = await client(fetchImpl).submit(input)
+    expect(outcome.result).toMatchObject({ rank: null, personalBest: false, replayCached: true, ranked: true })
+  })
+
   it("refuses a malformed success answer instead of showing it as a verified score", async () => {
     for (const body of [
       submissionBody({ score: "73" }),
       submissionBody({ score: -1 }),
       submissionBody({ rank: 0 }),
       submissionBody({ verified: "yes" }),
+      submissionBody({ personalBest: "yes" }),
+      submissionBody({ replayCached: undefined }),
       submissionBody({ submissionId: undefined }),
     ]) {
       const { fetchImpl } = fakeFetch(() => jsonResponse(body, 201))
