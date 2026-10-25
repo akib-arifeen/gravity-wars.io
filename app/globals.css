@@ -538,6 +538,34 @@ body {
   color: rgba(232, 246, 255, 0.6);
 }
 
+/* Both instruction lines are in the SSR HTML; the pointer type picks one. A coarse pointer is
+   unknowable on the server, so this choice must not be made in JS during render. */
+.gw-controls-line {
+  display: none;
+}
+
+.gw-controls-line[data-for="desktop"] {
+  display: inline;
+}
+
+.gw-controls[data-touch="1"] .gw-controls-line[data-for="desktop"] {
+  display: none;
+}
+
+.gw-controls[data-touch="1"] .gw-controls-line[data-for="touch"] {
+  display: inline;
+}
+
+@media (pointer: coarse) {
+  .gw-controls .gw-controls-line[data-for="desktop"] {
+    display: none;
+  }
+
+  .gw-controls .gw-controls-line[data-for="touch"] {
+    display: inline;
+  }
+}
+
 .gw-menu-foot {
   display: flex;
   align-items: center;

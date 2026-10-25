@@ -179,6 +179,13 @@ function Stars({ n, size = 14 }: { n: number; size?: number }) {
 
 // ---------------------------------------------------------------------------------------------
 
+// Both control lines ship in the HTML and CSS shows one. The server cannot evaluate
+// (pointer: coarse), so picking a line during render made a coarse-pointer client's first render
+// differ from the server's text: React hydration error #418. See .gw-controls in globals.css.
+const DESKTOP_CONTROLS =
+  "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
+const TOUCH_CONTROLS = "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
+
 interface MenuProps {
   difficulty: Difficulty
   onDifficulty(d: Difficulty): void
@@ -267,12 +274,6 @@ export function MenuScreen({
   const levelDisabled = (i: number) => !levelEnabled[i]
 
   const b = best[difficulty]
-  const touch =
-    layout === "touch" ||
-    (typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches)
-  const controls = touch
-    ? "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
-    : "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
 
   const stars = totalStars(campaignProgress)
   const relics = campaignProgress.relics.length
@@ -497,7 +498,14 @@ export function MenuScreen({
             </>
           )}
         </ul>
-        <p className="gw-controls">{controls}</p>
+        <p className="gw-controls" data-touch={layout === "touch" ? "1" : undefined}>
+          <span className="gw-controls-line" data-for="desktop">
+            {DESKTOP_CONTROLS}
+          </span>
+          <span className="gw-controls-line" data-for="touch">
+            {TOUCH_CONTROLS}
+          </span>
+        </p>
 
         <div className="gw-menu-foot">
           <button type="button" className="gw-btn gw-btn-ghost gw-btn-small" onClick={onStats}>
