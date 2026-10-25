@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { CONFIG } from "@/game/config"
+import { burnPromptVisible } from "@/game/assist"
 import { ARENAS } from "@/game/arenas"
 import { bossAnnouncement, bossPhaseText, type BossHud } from "@/game/boss"
 import { COSMIC_INFO } from "@/game/cosmic"
@@ -346,7 +347,11 @@ export function Hud({ hud, muted, onPause, onToggleMute, inert, layout, onPress,
                   data-locked={sl.locked ? "1" : undefined}
                   data-low={sl.low ? "1" : undefined}
                   data-ready={sl.kind === "ult" && (ultReady || ultActive) ? "1" : undefined}
-                  data-burn={sl.kind === "dash" && hud.assist.window && hud.dashCd <= 0 ? "1" : undefined}
+                  data-burn={
+                    sl.kind === "dash" && burnPromptVisible(hud.assist.window, hud.dashCd, hud.energy, sl.locked)
+                      ? "1"
+                      : undefined
+                  }
                   style={{ ["--p" as string]: sl.pct }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPress(sl.kind)}

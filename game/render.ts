@@ -3,7 +3,7 @@
 //
 // CONTRACT — exported signatures and documented behaviour are fixed.
 
-import { assistView } from "./assist"
+import { assistView, burnPromptVisible } from "./assist"
 import { CONFIG } from "./config"
 import { canAbsorb, pullRadius } from "./engine"
 import { cameraZoomScale, frameEdgeMarker, indicatorRange } from "./framing"
@@ -19,6 +19,8 @@ export interface RenderView {
   reducedMotion: boolean
   /** "touch" leaves room for the on-screen joystick (bottom-left) and pull button (bottom-right). */
   layout: "desktop" | "touch"
+  /** Campaign levels can lock the dash: the burn prompt must not advertise a locked ability. */
+  dashLocked?: boolean
   /**
    * Attract mode behind the menu: draw the world only — no vignette, flashes, floating text,
    * off-screen indicators or minimap.
@@ -176,6 +178,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   let dpr = view.dpr
   let reduced = view.reducedMotion
   let touch = view.layout === "touch"
+  let dashLocked = !!view.dashLocked
   let demo = !!view.demo
 
   // ---- camera -----------------------------------------------------------------------------
@@ -698,6 +701,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     dpr = v.dpr
     reduced = v.reducedMotion
     touch = v.layout === "touch"
+    dashLocked = !!v.dashLocked
     demo = !!v.demo
     canvas.width = Math.max(1, Math.round(W * dpr))
     canvas.height = Math.max(1, Math.round(H * dpr))
@@ -2481,17 +2485,21 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     // player in screen space so it stays legible at any zoom (and needs no HUD element).
     if (player && player.alive) {
       const v = assistView(world, player)
-      if (v.window && player.dashCd <= 0) {
-        const sx = (ppx - camX) * zoom + W / 2 + shx
-        const sy = (ppy - camY) * zoom + H / 2 + shy - player.radius * zoom - 24
-        g.globalAlpha = reduced ? 0.9 : 0.7 + 0.3 * Math.sin(clock * 14)
+      if (burnPromptVisible(v.window, player.dashCd, player.energy, dashLocked)) {
+        // Clamp to the viewport so the prompt can never clip at an edge (or run under the HUD edge).
+        const label = touch ? "BURN" : "BURN  SHIFT"
         g.font = "700 13px " + FONT
+        const half = g.measureText(label).width / 2
+        const pad = 10
+        const sx = clamp((ppx - camX) * zoom + W / 2 + shx, half + pad, W - half - pad)
+        const sy = clamp((ppy - camY) * zoom + H / 2 + shy - player.radius * zoom - 24, 26, H - 14)
+        g.globalAlpha = reduced ? 0.9 : 0.7 + 0.3 * Math.sin(clock * 14)
         g.textAlign = "center"
         g.textBaseline = "alphabetic"
         g.fillStyle = "#ffe28a"
         g.shadowColor = "#ffb347"
         g.shadowBlur = 8
-        g.fillText(touch ? "BURN" : "BURN  SHIFT", sx, sy)
+        g.fillText(label, sx, sy)
         g.shadowBlur = 0
         g.globalAlpha = 1
       }
