@@ -2695,3 +2695,56 @@ body {
     max-height: calc(100dvh - 184px - 190px - env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* =====================================================================================
+   First-session UX: live speed, the one respawn tip, and the pause help
+   ===================================================================================== */
+
+/* Live speed under the round clock: the number a burn is judged on, so the plain-language
+   "DASH ALONG PATH" prompt has a visible payoff. Tabular figures stop it jittering as it counts. */
+.gw-hud-speed {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(232, 246, 255, 0.8);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 479px) {
+  .gw-hud-speed {
+    font-size: 10px;
+  }
+}
+
+/* The single teaching line on the first respawn of an Endless round. */
+.gw-death-tip {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(232, 246, 255, 0.14);
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(232, 246, 255, 0.86);
+}
+
+/* Pause keeps the controls re-readable mid-round; the burn instruction sits above them. */
+.gw-pause-help {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(232, 246, 255, 0.12);
+}
+
+.gw-pause-tip {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+  color: #ffd36b;
+}
+
+/* A drag inside the scrolling menu must not chain into the page behind the fixed overlay. */
+.gw-overlay {
+  overscroll-behavior: contain;
+}

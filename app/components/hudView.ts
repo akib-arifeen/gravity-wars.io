@@ -3,10 +3,54 @@
 // Pure: the HUD renders exactly what these functions return, so the phone layout can be tested
 // without a DOM. The shell's `layout` prop is the only desktop/phone input.
 
-import type { LeaderboardEntry } from "@/game/types"
+import type { DeathCause, LeaderboardEntry } from "@/game/types"
 
 export type HudLayout = "desktop" | "touch"
 export type HudMode = "endless" | "round" | "campaign"
+
+/**
+ * The one plain-language sentence that teaches the gravity-assist burn. The menu, the countdown,
+ * the pause help and the respawn tip all use these exact words, so a newcomer meets one phrase.
+ * The technical name ("prograde burn window open") stays on the dash control for assistive tech.
+ */
+export const BURN_TIP = "Fly close past a star, then DASH ALONG PATH for a speed boost."
+
+/**
+ * The single respawn tip, chosen by what just killed the player. Shown on the Endless respawn
+ * overlay for the first death of a round only, so it teaches once instead of nagging.
+ */
+export function respawnTip(cause: DeathCause): string {
+  switch (cause.by) {
+    case "star":
+    case "whitedwarf":
+    case "neutronstar":
+      return "Stars refill energy, but the surface is fatal: skim the edge. " + BURN_TIP
+    case "blackhole":
+      return "Nothing escapes the black hole once you are inside. Steer wide. " + BURN_TIP
+    case "pulsar":
+      return "Pulsar beams sweep the field. Cross between pulses. " + BURN_TIP
+    default:
+      return "Anything ringed in red can absorb you. Break away early. " + BURN_TIP
+  }
+}
+
+/** The live speed readout: whole u/s, plus the surge multiplier while a burn is paying off. */
+export function speedLine(speed: number, surge: number, surgeMul: number): string {
+  const base = `${Math.max(0, Math.round(speed))} u/s`
+  return surge > 0 && surgeMul > 1 ? `${base} · ×${surgeMul.toFixed(2)}` : base
+}
+
+/** The quiet gap between two unready-Singularity answers (ms). */
+export const ULT_HINT_MS = 4000
+
+/**
+ * Whether an unready Singularity press should be answered now. The engine ignores the press
+ * silently, so the shell answers it with the charge; `last` is the time of the previous answer, so
+ * a mash gets one message per gap instead of one per press.
+ */
+export function ultHintDue(pressed: boolean, ult: number, now: number, last: number): boolean {
+  return pressed && ult < 1 && now - last >= ULT_HINT_MS
+}
 
 /** Round clock as m:ss, rounded up so 0.2 s left still reads 0:01. */
 export function formatClock(s: number): string {

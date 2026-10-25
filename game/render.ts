@@ -152,6 +152,15 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
 
+/**
+ * The flyby telegraph drawn over the player while a dash would pay the burn. Plain language: a
+ * newcomer reads what to press, not "prograde". The accessible name for the same window stays
+ * technical ("prograde burn window open") on the dash control, which is its only channel.
+ */
+export function burnPromptLabel(touch: boolean): string {
+  return touch ? "DASH ALONG PATH" : "DASH ALONG PATH  SHIFT"
+}
+
 // ---------------------------------------------------------------------------------------------
 
 export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Renderer {
@@ -2481,14 +2490,14 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       g.fillRect(0, 0, W, H)
       g.globalAlpha = 1
     }
-    // Flyby telegraph: only a PROGRADE dash inside the periapsis window is the burn, so the prompt
-    // names the direction. Drawn above the player in screen space so it stays legible at any zoom
-    // (and needs no HUD element).
+    // Flyby telegraph: only a dash along the flight path, inside the periapsis window, is the
+    // burn, so the prompt names the direction in plain language. Drawn above the player in screen
+    // space so it stays legible at any zoom (and needs no HUD element).
     if (player && player.alive) {
       const v = assistView(world, player)
       if (burnPromptVisible(v.window, player.dashCd, player.energy, dashLocked)) {
         // Clamp to the viewport so the prompt can never clip at an edge (or run under the HUD edge).
-        const label = touch ? "PROGRADE BURN" : "PROGRADE BURN  SHIFT"
+        const label = burnPromptLabel(touch)
         g.font = "700 13px " + FONT
         const half = g.measureText(label).width / 2
         const pad = 10

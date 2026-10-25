@@ -6,12 +6,13 @@ Play it: https://gravity-warsio.vercel.app
 
 ## Modes
 
+- **First run** starts on **Easy** in the **Classic** arena, and the menu remembers whatever you pick from then on. The in-game HUD shows live speed, `Esc` pauses to a screen that re-reads the controls, and the first death of an Endless round adds one tip.
 - **Endless** (the default) never ends.
   - You respawn a few seconds after you die, and your best score for the session is kept.
   - Bots of varied skill join and leave all the time, and they get tougher as you grow.
   - A live leaderboard ranks everyone by mass, and the #1 body wears a crown.
   - The camera keeps following the leader while you wait to respawn, so the arena visibly carries on without you.
-- **Round** is a 3-minute match against 3, 5 or 7 bots (Easy, Normal, Hard). You win by reaching 130 mass first or by being the last one left. If the clock runs out, the heaviest body wins.
+- **Round** is a 2:30 match against 3, 5 or 7 bots (Easy, Normal, Hard). You win by reaching the goal mass first (90 on Easy, 130 on Normal and Hard) or by being the last one left. If the clock runs out, the heaviest body wins.
 - **Campaign: The Long Fall** is twelve levels in three sectors against a fixed field, with three bosses.
   - Every level has a goal, a bonus objective and a hidden relic: up to three stars per level.
   - Stars unlock **Dash** (1 star), **Repulse** (3 stars) and the **Singularity** (6 stars) inside the campaign.

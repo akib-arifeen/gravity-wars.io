@@ -247,8 +247,16 @@ export const CONFIG = {
     duration: 150,
     /** Countdown before physics starts (s). */
     countdown: 3,
-    /** First body to reach this mass wins the round. */
+    /** First body to reach this mass wins the round. The default for campaign levels. */
     criticalMass: 130,
+    /**
+     * The Round mode's goal by starting skill. Easy was 130, which the Easy bot profile (the
+     * game's own low-skill reference) never reached in a 12-seed, 150 s baseline (peaks 40-119,
+     * median 87): a newcomer could not finish. 90 lets that same reference win 5 of those 12
+     * rounds while the median run still falls short, so the goal is attainable without being free.
+     * Normal and Hard are unchanged. See roundGoal.test.ts for the measured baseline.
+     */
+    criticalMassByDifficulty: { easy: 90, normal: 130, hard: 130 },
   },
 
   feel: {

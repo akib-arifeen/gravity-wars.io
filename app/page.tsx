@@ -45,6 +45,7 @@ import {
   type MenuMode,
 } from "./components/Screens"
 import { Toasts, type ToastItem } from "./components/Toasts"
+import { startDefaults } from "./startDefaults"
 
 type Screen = "menu" | "playing" | "paused" | "over"
 
@@ -59,6 +60,7 @@ interface Outcome {
 const MUTE_KEY = "gw:muted"
 const ARENA_KEY = "gw:arena"
 const MODE_KEY = "gw:mode"
+const DIFFICULTY_KEY = "gw:difficulty"
 const TOAST_MS = 3500
 /** The cosmetic reward for recovering every hidden relic. */
 // ds-allow-hardcode: player body colour is game data, not a UI theme token.
@@ -71,13 +73,15 @@ function newSeed(): number {
   return (Date.now() + Math.floor(Math.random() * 1000003)) % 2147483647
 }
 
+const FIRST_RUN = startDefaults({})
+
 export default function Page() {
   const [screen, setScreen] = useState<Screen>("menu")
-  const [difficulty, setDifficulty] = useState<Difficulty>("normal")
+  const [difficulty, setDifficulty] = useState<Difficulty>(FIRST_RUN.difficulty)
   const [seed, setSeed] = useState(1)
   const [runId, setRunId] = useState(0)
   const [muted, setMuted] = useState(false)
-  const [arena, setArena] = useState<ArenaChoice>("random")
+  const [arena, setArena] = useState<ArenaChoice>(FIRST_RUN.arena)
   const [roundArena, setRoundArena] = useState<ArenaId>("classic")
   const [mode, setMode] = useState<MenuMode>("endless")
   const [roundMode, setRoundMode] = useState<GameMode>("endless")
@@ -92,6 +96,7 @@ export default function Page() {
   const [dailyRunConfig, setDailyRunConfig] = useState<DailyConfig | null>(null)
   const [boss, setBoss] = useState<BossHud | null>(null)
   const [deathText, setDeathText] = useState("")
+  const [deathTip, setDeathTip] = useState("")
   const [profileTick, setProfileTick] = useState(0)
   const [showProfile, setShowProfile] = useState(false)
   const [toasts, setToasts] = useState<ToastItem[]>([])
@@ -164,12 +169,18 @@ export default function Page() {
   useEffect(() => {
     try {
       if (window.localStorage.getItem(MUTE_KEY) === "1") setMuted(true)
-      const a = window.localStorage.getItem(ARENA_KEY)
-      if (a && (ARENA_CHOICES as string[]).includes(a)) setArena(a as ArenaChoice)
+      // Only a stored choice moves the menu off its first-run defaults; the first render already
+      // matches them, so hydration sees the same markup the server sent.
+      const start = startDefaults({
+        difficulty: window.localStorage.getItem(DIFFICULTY_KEY),
+        arena: window.localStorage.getItem(ARENA_KEY),
+      })
+      setDifficulty(start.difficulty)
+      setArena(start.arena)
       const m = window.localStorage.getItem(MODE_KEY)
       if (m === "round" || m === "endless" || m === "campaign" || m === "daily") setMode(m)
     } catch {
-      // Storage blocked: stay unmuted, default arena.
+      // Storage blocked: stay unmuted, on the first-run defaults.
     }
     let stored: Storage | null = null
     try {
@@ -242,6 +253,16 @@ export default function Page() {
     }
   }, [])
 
+  const chooseDifficulty = useCallback((d: Difficulty) => {
+    sfxRef.current?.ui("click")
+    setDifficulty(d)
+    try {
+      window.localStorage.setItem(DIFFICULTY_KEY, d)
+    } catch {
+      // Not persisted.
+    }
+  }, [])
+
   const chooseMode = useCallback((m: MenuMode) => {
     sfxRef.current?.ui("click")
     setMode(m)
@@ -298,6 +319,7 @@ export default function Page() {
         opts.kind === "campaign" ? ABILITY_UNLOCKS.filter((a) => unlockedNow.indexOf(a.id) < 0).map((a) => a.id) : [],
       )
       setDeathText("")
+      setDeathTip("")
       topRef.current = null
       setToasts([])
       setBoss(null)
@@ -594,7 +616,10 @@ export default function Page() {
           level={runKind === "campaign" ? roundLevel : null}
           lockedAbilities={roundLocked}
           playerColor={skin}
-          onDeath={setDeathText}
+          onDeath={(text, tip) => {
+            setDeathText(text)
+            setDeathTip(tip)
+          }}
           onBoss={setBoss}
           onNotice={onNotice}
           profile={profileRef.current}
@@ -624,6 +649,7 @@ export default function Page() {
           muted={muted}
           layout={layout}
           deathText={deathText}
+          deathTip={deathTip}
           onPress={(k) => inputRef.current?.press(k)}
           onPause={pauseNow}
           onToggleMute={toggleMute}
@@ -632,10 +658,7 @@ export default function Page() {
       {screen === "menu" && (
         <MenuScreen
           difficulty={difficulty}
-          onDifficulty={(d) => {
-            sfxRef.current?.ui("click")
-            setDifficulty(d)
-          }}
+          onDifficulty={chooseDifficulty}
           onPlay={play}
           muted={muted}
           onToggleMute={toggleMute}

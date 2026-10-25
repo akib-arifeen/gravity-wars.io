@@ -21,6 +21,7 @@ import type { DailyConfig } from "@/game/daily"
 import { CONFIG } from "@/game/config"
 import type { ArenaId, BodyStats, DeathCause, Difficulty, GameMode, RoundResult } from "@/game/types"
 import { AbilityIcon, LockIcon, StarIcon } from "./Icons"
+import { BURN_TIP } from "./hudView"
 import { radioTabStop, radioTarget } from "./radioNav"
 
 const BEST_KEY = "gw:best:v1"
@@ -54,11 +55,24 @@ export const DIFFICULTIES: { id: Difficulty; label: string; sub: string; endless
 /** The mode the menu offers: the two engine modes plus the campaign and the daily challenge. */
 export type MenuMode = GameMode | "campaign" | "daily"
 
-export const MODES: { id: MenuMode; label: string; copy: string }[] = [
-  { id: "endless", label: "Endless", copy: "Endless \u2014 the arena never sleeps. Climb the leaderboard." },
-  { id: "round", label: "Round", copy: `3 minute match. Reach ${CONFIG.round.criticalMass} mass or be the last one left.` },
-  { id: "campaign", label: "Campaign", copy: "The Long Fall \u2014 twelve levels down three sectors, three bosses, one way out." },
-  { id: "daily", label: "Daily", copy: "One seeded arena for everyone, today only. Your score is the peak mass of a single run." },
+/** The Round goal for the selected starting skill (CONFIG.round.criticalMassByDifficulty). */
+export function roundGoal(difficulty: Difficulty): number {
+  return CONFIG.round.criticalMassByDifficulty[difficulty]
+}
+
+/** The round clock as the menu states it, from the engine's own duration. */
+export const ROUND_LENGTH = `${Math.floor(CONFIG.round.duration / 60)}:${String(CONFIG.round.duration % 60).padStart(2, "0")}`
+
+/** The one-line teaching each mode shows under its tab. Round names the goal for the chosen skill. */
+export const MODES: { id: MenuMode; label: string; copy: (difficulty: Difficulty) => string }[] = [
+  { id: "endless", label: "Endless", copy: () => "Endless \u2014 the arena never sleeps. Climb the leaderboard." },
+  {
+    id: "round",
+    label: "Round",
+    copy: (d) => `${ROUND_LENGTH} match. Reach ${roundGoal(d)} mass or be the last one left.`,
+  },
+  { id: "campaign", label: "Campaign", copy: () => "The Long Fall \u2014 twelve levels down three sectors, three bosses, one way out." },
+  { id: "daily", label: "Daily", copy: () => "One seeded arena for everyone, today only. Your score is the peak mass of a single run." },
 ]
 
 /** Everything the daily panel needs about today and the player's record. */
@@ -183,8 +197,8 @@ function Stars({ n, size = 14 }: { n: number; size?: number }) {
 // (pointer: coarse), so picking a line during render made a coarse-pointer client's first render
 // differ from the server's text: React hydration error #418. See .gw-controls in globals.css.
 const DESKTOP_CONTROLS =
-  "WASD or hold the mouse to thrust · Space or right-click to pull · Shift dash · E repulse · Q Singularity · Esc pauses"
-const TOUCH_CONTROLS = "Drag on the left to steer · hold PULL · tap DASH, REPULSE and ULT"
+  "WASD or hold the mouse to thrust · Space or right-click to pull · Shift = DASH ALONG PATH · E repulse · Q Singularity · Esc pauses"
+const TOUCH_CONTROLS = "Drag on the left to steer · hold PULL · tap the glowing DASH, REPULSE and ULT"
 
 interface MenuProps {
   difficulty: Difficulty
@@ -319,7 +333,7 @@ export function MenuScreen({
             </button>
           ))}
         </div>
-        <p className="gw-mode-copy">{MODES.find((m) => m.id === mode)?.copy}</p>
+        <p className="gw-mode-copy">{MODES.find((m) => m.id === mode)?.copy(difficulty)}</p>
 
         {mode === "campaign" ? (
           <>
@@ -474,7 +488,7 @@ export function MenuScreen({
         <ul className="gw-how">
           {mode === "endless" ? (
             <>
-              <li>Eat debris and smaller rivals to climb the leaderboard.</li>
+              <li>{BURN_TIP}</li>
               <li>Get absorbed and you respawn in a few seconds. Rivals come and go.</li>
               <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
             </>
@@ -487,13 +501,13 @@ export function MenuScreen({
           ) : mode === "daily" ? (
             <>
               <li>Everyone gets the same seeded arena, rivals and cosmic events today.</li>
-              <li>One round, three minutes. Your score is your peak mass.</li>
+              <li>One round, {ROUND_LENGTH}. Your score is your peak mass.</li>
               <li>Come back tomorrow for a new arena and seed.</li>
             </>
           ) : (
             <>
-              <li>Grow by eating debris and smaller rivals.</li>
-              <li>Reach {CONFIG.round.criticalMass} mass or be the last one left.</li>
+              <li>{BURN_TIP}</li>
+              <li>Reach {roundGoal(difficulty)} mass or be the last one left.</li>
               <li>Stars recharge energy, but touching a star or the black hole is fatal.</li>
             </>
           )}
@@ -564,6 +578,20 @@ export function PauseScreen({ onResume, onRestart, onQuit }: PauseProps) {
           Quit to menu
           <span className="gw-key">Q</span>
         </button>
+        {/* Help stays on the pause screen so the controls can be re-read mid-round. Both control
+            lines ship in the HTML and CSS shows the one the pointer matches: the same rule as the
+            menu, and the reason the server's markup never depends on matchMedia. */}
+        <div className="gw-pause-help">
+          <p className="gw-pause-tip">{BURN_TIP}</p>
+          <p className="gw-controls">
+            <span className="gw-controls-line" data-for="desktop">
+              {DESKTOP_CONTROLS}
+            </span>
+            <span className="gw-controls-line" data-for="touch">
+              {TOUCH_CONTROLS}
+            </span>
+          </p>
+        </div>
       </div>
     </div>
   )

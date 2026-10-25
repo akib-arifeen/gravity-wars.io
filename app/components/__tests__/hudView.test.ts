@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest"
 import type { LeaderboardEntry } from "@/game/types"
 import {
+  BURN_TIP,
   centreHud,
   dashName,
   dismissesLeaderboard,
@@ -12,6 +13,10 @@ import {
   rankLine,
   rankPill,
   rankPillLabel,
+  respawnTip,
+  speedLine,
+  ultHintDue,
+  ULT_HINT_MS,
 } from "../hudView"
 
 const ROWS: LeaderboardEntry[] = [
@@ -129,5 +134,57 @@ describe("centreHud", () => {
     const desktop = centreHud("campaign", "desktop", { ...CENTRE, campaign })
     expect(desktop.tag).toBe("LEVEL 2 / 12 · FIRST ORBIT")
     expect(desktop.goal).toBe("Reach 45 mass")
+  })
+})
+
+describe("live speed readout", () => {
+  it("tells the burn's payoff in whole u/s, and only names a multiplier while a surge pays", () => {
+    expect(speedLine(342.4, 0, 1)).toBe("342 u/s")
+    expect(speedLine(0, 0, 1)).toBe("0 u/s")
+    expect(speedLine(342.4, 2.1, 1.24)).toBe("342 u/s · ×1.24")
+    // A surge with no speed multiplier is not a multiplier.
+    expect(speedLine(120, 1.5, 1)).toBe("120 u/s")
+  })
+
+  it("keeps the rounded value honest and never negative", () => {
+    expect(speedLine(-8, 0, 1)).toBe("0 u/s")
+    expect(speedLine(129.6, 0, 1)).toBe("130 u/s")
+  })
+})
+
+describe("unready Singularity feedback", () => {
+  it("answers a press only while the charge is short of full", () => {
+    expect(ultHintDue(true, 0.42, 10_000, -1e9)).toBe(true)
+    expect(ultHintDue(true, 1, 10_000, -1e9)).toBe(false)
+    expect(ultHintDue(false, 0.4, 10_000, -1e9)).toBe(false)
+  })
+
+  it("rate-limits a mash to one answer per gap", () => {
+    expect(ULT_HINT_MS).toBe(4000)
+    expect(ultHintDue(true, 0.4, 10_000, 9_000)).toBe(false)
+    expect(ultHintDue(true, 0.4, 14_000, 10_000)).toBe(true)
+  })
+})
+
+describe("the one respawn tip", () => {
+  const cause = (by: "star" | "blackhole" | "body" | "pulsar" | "whitedwarf" | "neutronstar") => ({
+    by,
+    killerId: "bot-1",
+  })
+
+  it("names the plain-language burn in every variant and stays one line", () => {
+    for (const by of ["star", "blackhole", "body", "pulsar", "whitedwarf", "neutronstar"] as const) {
+      const tip = respawnTip(cause(by) as never)
+      expect(tip).toContain(BURN_TIP)
+      expect(tip.length).toBeLessThan(160)
+      expect(tip).not.toContain("prograde")
+    }
+  })
+
+  it("matches the advice to what killed the player", () => {
+    expect(respawnTip(cause("star") as never)).toMatch(/surface is fatal/)
+    expect(respawnTip(cause("blackhole") as never)).toMatch(/Nothing escapes/)
+    expect(respawnTip(cause("body") as never)).toMatch(/ringed in red/)
+    expect(respawnTip(cause("pulsar") as never)).toMatch(/beams/)
   })
 })
