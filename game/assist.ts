@@ -53,6 +53,7 @@ export function emptyAssist(): AssistState {
       prevVr: 0,
       dashAt: -1,
       dashRadial: 0,
+      dashPrograde: false,
       dashIn: false,
       dashPeriIn: 0,
       periAt: -1,
@@ -81,6 +82,7 @@ export function resetPass(a: AssistState): void {
   p.prevVr = 0
   p.dashAt = -1
   p.dashRadial = 0
+  p.dashPrograde = false
   p.dashIn = false
   p.dashPeriIn = 0
   p.periAt = -1
@@ -165,19 +167,28 @@ export function noteDash(body: Body, wells: readonly Well[], now: number): BurnR
 }
 
 /**
- * True when the dash just recorded is aimed at the burn: inside the window the HUD advertised, on
- * a pass that has not paid yet. The engine uses it to keep the dash's own impulse out of the legacy
- * fast-pass perk, which would otherwise pay on the dash frame — before periapsis is graded.
+ * True when the dash just recorded is aimed at the burn: prograde (or at least tangential), on a
+ * pass that has not paid yet, and inside the window this body's difficulty actually advertises.
+ * The engine uses it to keep the dash's own impulse out of the legacy fast-pass perk, which would
+ * otherwise pay on the dash frame — before periapsis is graded. A retrograde dash is not a burn
+ * aim, so it must not suppress that perk either.
  */
 export function dashAimedAtBurn(body: Body): boolean {
   const p = body.assist.pass
-  return p.wellId !== "" && !p.paid && p.dashIn && Math.abs(p.dashPeriIn) <= CONFIG.assist.window
+  return (
+    p.wellId !== "" &&
+    !p.paid &&
+    p.dashPrograde &&
+    p.dashIn &&
+    Math.abs(p.dashPeriIn) <= assistWindow(body)
+  )
 }
 
 /**
- * Record the radial part of the dash impulse that just fired (u/s). The engine calls this before
- * the dash payout, so trackPass can subtract it on the same step and refuse a periapsis the dash
- * itself created. No pass, no record.
+ * Record the direction and radial part of the dash impulse that just fired (u/s). The engine calls
+ * this before the impulse is applied, so the body's velocity here is still the pre-dash one.
+ * trackPass subtracts the radial part on the same step, so a dash cannot manufacture the periapsis
+ * it is graded on. No pass, no record.
  */
 export function noteDashImpulse(body: Body, wells: readonly Well[], impulseX: number, impulseY: number): void {
   const p = body.assist.pass
@@ -188,6 +199,9 @@ export function noteDashImpulse(body: Body, wells: readonly Well[], impulseX: nu
   const dy = body.y - w.y
   const d = Math.sqrt(dx * dx + dy * dy)
   p.dashRadial = d > 1e-6 ? (impulseX * dx + impulseY * dy) / d : 0
+  // Only a prograde or tangential dash is a burn (an Oberth burn adds to the motion). Retrograde
+  // dashes stay a pure movement tool and can never be graded.
+  p.dashPrograde = impulseX * (body.vx - w.vx) + impulseY * (body.vy - w.vy) >= 0
 }
 
 /**
@@ -241,7 +255,14 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
       p.periRelSpeed = Math.sqrt(vrx * vrx + vry * vry)
       if (p.dashAt >= 0) burn = grade(body, w, now)
     }
-    p.prevVr = vrNow
+    // Remember the same dash-free radial value the flip test above used. Storing the post-impulse
+    // value instead would let a dash that reversed the approach hide the genuine crossing on the
+    // very next step (the body is receding, so no later flip could ever be seen) and would report a
+    // sign the body never had. The pass is still graded only against the periapsis the *dash-free*
+    // motion produces, and a graded burn is prograde-only and one-per-pass on a long cooldown, so
+    // this cannot be farmed; an outward dash's own flip is rejected by grade() on direction and
+    // timing.
+    p.prevVr = vr
     return burn
   }
 
@@ -273,6 +294,7 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
   p.prevVr = bestDist > 0 ? (dx * (body.vx - best.vx) + dy * (body.vy - best.vy)) / bestDist : 0
   p.dashAt = -1
   p.dashRadial = 0
+  p.dashPrograde = false
   p.dashIn = false
   p.dashPeriIn = 0
   p.periAt = -1
@@ -283,15 +305,18 @@ export function trackPass(body: Body, wells: readonly Well[], now: number): Burn
 }
 
 /**
- * Grade the pass at periapsis and return the reward, or null when it does not qualify: no dash
- * in the window, periapsis too far out, too slow relative to the well, already paid, on cooldown,
- * or the same well inside its repeat lock.
+ * Grade the pass at periapsis and return the reward, or null when it does not qualify: a dash that
+ * was not prograde, no dash in the window, periapsis too far out, too slow relative to the well,
+ * already paid, on cooldown, or the same well inside its repeat lock.
  */
 function grade(body: Body, w: Well, now: number): BurnReady | null {
   const a = body.assist
   const p = a.pass
   const A = CONFIG.assist
   if (p.paid || p.periAt < 0 || p.dashAt < 0) return null
+  // An Oberth burn adds to the motion. A dash aimed against the well-relative velocity is just a
+  // movement tool: it cannot be a burn, however well timed it was.
+  if (!p.dashPrograde) return null
   if (a.cd > 0 || wellLocked(a, w.id, now)) return null
   // Inbound: the dash is timed against the periapsis it predicted (what the HUD showed).
   // Outbound: the periapsis is already known, so the dash is timed against the real one.
@@ -371,11 +396,12 @@ export function assistView(world: { time: number; wells: readonly Well[] }, body
   if (p.stage === "in") {
     const pred = predictPeri(body, w)
     if (!pred) return { wellId: p.wellId, stage: "in", window: false, periIn: null }
-    // A predicted periapsis inside the well's own surface is a collision, not a flyby, and can
-    // never pay. Gravity can only bend the real path closer than this straight-line estimate, so
-    // anything admitted here is genuinely a deep, fast pass.
-    const survivable = pred.impact > w.radius + body.radius
-    const real = survivable && deepEnough(w, pred.impact, pred.rel)
+    // A predicted periapsis inside the well's own surface is a head-on plunge and never pays. The
+    // straight-line impact parameter is only an upper bound on where gravity will take the body —
+    // it filters obvious plunges, it is not a collision guarantee — so gravity may still end the
+    // pass on the surface after a prompt went up. Nothing here promises a safe flyby.
+    const notPlunge = pred.impact > w.radius + body.radius
+    const real = notPlunge && deepEnough(w, pred.impact, pred.rel)
     return { wellId: p.wellId, stage: "in", window: real && pred.periIn <= win, periIn: pred.periIn }
   }
   return { wellId: p.wellId, stage: p.stage, window: false, periIn: null }

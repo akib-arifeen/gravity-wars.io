@@ -328,8 +328,10 @@ export function createWorld(opts: CreateWorldOptions): World {
  *          thrusting-length |a| > thrustDeadzone, else v/|v| if |v| >= 1e-6, else no dash (and no
  *          cost). On a dash: energy -= cost; impulse = u * dash.impulse (added in 3f); dashCd =
  *          dash.cooldown; stats.dashes += 1; emit {type:"dash", dx/dy = u}. The dash is then
- *          offered to the assist pass (assist.ts): inside a flyby's periapsis window it is an
- *          Oberth burn and pays out immediately (7b).
+ *          offered to the assist pass (assist.ts): a PROGRADE or tangential dash (its impulse
+ *          dotted with the body's well-relative velocity before the impulse is >= 0) inside a
+ *          flyby's periapsis window is an Oberth burn and pays out immediately (7b). A retrograde
+ *          dash never burns, and never suppresses the legacy slingshot perk.
  *        - Repulse: intent.repulse && repulseCd == 0 && energy >= repulse.cost -> energy -= cost;
  *          repulseCd = repulse.cooldown; the body repulses in step 4b; stats.repulses += 1; emit
  *          {type:"repulse", r: repulseRadius(body)}.
@@ -390,12 +392,12 @@ export function createWorld(opts: CreateWorldOptions): World {
  *      opens while the body is inside a well's assist band and closing on the well in the well's
  *      own frame; periapsis is where that relative radial speed flips positive (judged without the
  *      radial part of a dash impulse fired that same step, so a dash cannot manufacture its own
- *      periapsis). A pass pays out (Oberth burn) only if a dash landed within the difficulty's
- *      window of that periapsis, the periapsis was inside the well's peri band, the relative speed
- *      was high enough, the payout cooldown and same-well lock are clear, and the pass has not
- *      paid. A burn grants energy and Singularity charge, a prograde impulse relative to the well,
- *      the graded speed surge, stats.oberths += 1, sets slingCd so the legacy slingshot cannot
- *      double-pay, and emits {type:"oberth"}. It does not touch stats.slingshots.
+ *      periapsis). A pass pays out (Oberth burn) only if a PROGRADE or tangential dash landed
+ *      within the difficulty's window of that periapsis, the periapsis was inside the well's peri
+ *      band, the relative speed was high enough, the payout cooldown and same-well lock are clear,
+ *      and the pass has not paid. A burn grants energy and Singularity charge, a prograde impulse
+ *      relative to the well, the graded speed surge, stats.oberths += 1, sets slingCd so the legacy
+ *      slingshot cannot double-pay, and emits {type:"oberth"}. It does not touch stats.slingshots.
  *      A pass that leaves the band or outlives CONFIG.assist.maxPass is dropped unrewarded.
  *  8. Eating, bodies then debris in array order (as before): an alive body eats each debris whose
  *     centre distance < radius: mass += debris.mass; crystals add CONFIG.crystal.energy (clamped)

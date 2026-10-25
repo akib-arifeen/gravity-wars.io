@@ -78,8 +78,7 @@ export interface BodyStats {
  * One gravity-assist pass around a well (see assist.ts). A pass opens while the body is inside the
  * well's assist band and closing on it in the well's own frame, provided the payout gates are
  * clear, and is graded at periapsis.
- * "none" is outside every band; "in" is inbound; "out" is after periapsis (or after a dash
- * reversed the approach).
+ * "none" is outside every band; "in" is inbound; "out" is after the periapsis flip.
  */
 export interface AssistPass {
   /** Well being tracked, "" outside a pass. */
@@ -99,6 +98,12 @@ export interface AssistPass {
    * the periapsis flip on that step, so a dash cannot manufacture the periapsis it is graded on.
    */
   dashRadial: number
+  /**
+   * True when the latest dash pointed prograde or tangential: its impulse dotted with the body's
+   * well-relative velocity *before* the impulse is non-negative. A burn is prograde only; a
+   * retrograde dash is never graded, never pays, and never suppresses the legacy fast-pass perk.
+   */
+  dashPrograde: boolean
   /**
    * True when the latest dash was made on the inbound half. Its timing is then judged against the
    * periapsis the dash predicts (dashPeriIn), the same number the HUD advertised, because the
