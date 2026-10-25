@@ -26,6 +26,13 @@ export interface DailyConfig {
 export const DAILY_KEY = "gw:daily:v1"
 
 /**
+ * Bump when anything that changes a replayed daily round changes: the engine, the arena layout,
+ * CONFIG, bot brains or the trace format. A server rejects a run issued under another version
+ * instead of replaying it with different rules.
+ */
+export const DAILY_RULESET_VERSION = 1
+
+/**
  * How many days of records are kept. A year, so a full year's streak is still displayable; the
  * set stays bounded (one small record per day, well under a localStorage quota).
  */

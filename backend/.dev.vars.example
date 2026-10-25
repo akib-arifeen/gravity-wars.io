@@ -1,0 +1,3 @@
+# Local-only value for hashing the request IP into a rate-limit key.
+# Copy to .dev.vars and replace with any long random string; never reuse a production secret here.
+ACTOR_HASH_KEY=local-development-only-change-me
