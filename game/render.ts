@@ -221,9 +221,9 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
   const glowCache = new Map<string, HTMLCanvasElement>()
   const discCache = new Map<string, HTMLCanvasElement>()
   let ringSprite: HTMLCanvasElement | null = null
-  // The Vast's solar current: one cached annulus sprite, per-seed visual parameters and one
-  // cached star-surface texture. All are built on demand, never per frame.
-  let currentRing: HTMLCanvasElement | null = null
+  // The Vast's solar current: one cached annulus sprite (keyed by band radius), per-seed visual
+  // parameters and one cached star-surface texture. All are built on demand, never per frame.
+  let currentRing: { radius: number; canvas: HTMLCanvasElement } | null = null
   let currentVisual: SolarCurrentVisual | null = null
   let currentVisualSeed = -1
   let starSurface: { key: string; canvas: HTMLCanvasElement } | null = null
@@ -1126,15 +1126,15 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
 
   /**
    * Cached annulus sprite: a low-alpha, source-over band with soft inner and outer edges. It is
-   * built once (512 px, then scaled to the band) and never allocated per frame.
+   * built once per band radius (512 px, then scaled to the band) and never allocated per frame.
+   * The radius comes from the physics helper, so the drawn band sits exactly where the force does.
    */
-  function getCurrentRing(): HTMLCanvasElement {
-    if (currentRing) return currentRing
+  function getCurrentRing(R: number): HTMLCanvasElement {
+    if (currentRing && currentRing.radius === R) return currentRing.canvas
     const S = 512
     const c = makeCanvas(S, S)
     const sg = c.getContext("2d")
     if (sg) {
-      const R = CONFIG.vast.arenaRadius * CONFIG.vast.solarCurrent.bandRadiusFrac
       const hw = CONFIG.vast.solarCurrent.halfWidth
       const inner = (R - hw) / (R + hw)
       const mid = R / (R + hw)
@@ -1147,7 +1147,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
       sg.fillStyle = gd
       sg.fillRect(0, 0, S, S)
     }
-    currentRing = c
+    currentRing = { radius: R, canvas: c }
     return c
   }
 
@@ -1222,7 +1222,7 @@ export function createRenderer(canvas: HTMLCanvasElement, view: RenderView): Ren
     g.globalCompositeOperation = "source-over"
     // Annulus.
     g.globalAlpha = 1
-    g.drawImage(getCurrentRing(), -outer, -outer, outer * 2, outer * 2)
+    g.drawImage(getCurrentRing(R), -outer, -outer, outer * 2, outer * 2)
     // Two streamers/prominences, from the star's limb out across the band.
     let starR = 0
     for (let i = 0; i < world.wells.length; i++) {

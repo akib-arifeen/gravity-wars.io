@@ -50,10 +50,17 @@ export function speedValue(speed: number): string {
 }
 
 /**
- * The surge ceiling as a suffix (" · ×1.24 cap"), then the solar-current sail's own ceiling
- * (" · current ×1.09") while it is riding The Vast's band. Both are speed ceilings, not measured
- * ratios, so they are labelled as caps and the sail is named by its source. Returns "" when
- * neither applies; the phone layout drops this whole span at its narrow breakpoint.
+ * The speed ceilings as suffixes, never measured ratios. First the burn's surge ceiling
+ * (" · ×1.24 cap") while a surge is running, then the solar-current sail's ceiling
+ * (" · current ×1.09"), which is the speed-cap multiplier `1 + thrustMul · sail` that The Vast's
+ * band grants. The sail suffix is not an in-band flag: a decaying sail keeps it on screen outside
+ * the band, stepping down as the sail falls (×1.18 at a full sail, ×1.09 at half), and it only
+ * vanishes once the sail is too small to name a real ceiling — so the player watches the bonus
+ * fade instead of losing the label in one frame.
+ *
+ * A full state reads " · ×1.24 cap · current ×1.18"; with the surge spent and the sail a third of
+ * the way down it reads " · current ×1.12". Returns "" when neither applies. The phone layout
+ * drops this whole span at its narrow breakpoint, so the core value never competes with it.
  */
 export function speedCapText(surge: number, surgeMul: number, sail = 0): string {
   let out = surge > 0 && surgeMul > 1 ? ` · ×${surgeMul.toFixed(2)} cap` : ""
@@ -63,7 +70,11 @@ export function speedCapText(surge: number, surgeMul: number, sail = 0): string 
   return out
 }
 
-/** The whole readout on one line: "SPEED 342 u/s · ×1.24 cap · current ×1.09". */
+/**
+ * The whole readout on one line. Full state: "SPEED 342 u/s · ×1.24 cap · current ×1.18". As a
+ * decaying sail falls outside the band the suffixes shrink with it: "SPEED 342 u/s · current
+ * ×1.12", then just "SPEED 342 u/s".
+ */
 export function speedLine(speed: number, surge: number, surgeMul: number, sail = 0): string {
   return `SPEED ${speedValue(speed)}${speedCapText(surge, surgeMul, sail)}`
 }

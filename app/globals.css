@@ -2720,10 +2720,11 @@ body {
   }
 }
 
-/* The full readout is wider than the gap between the mass panel and the centre column on a narrow
-   phone, so the "SPEED" prefix and then the surge ceiling are dropped before the text can run
-   under the panel. The sr-only copy inside the element carries the whole line at every width. */
-@media (max-width: 419px) {
+/* The combined ceiling suffix ("×1.24 cap · current ×1.18") is wider than the gap between the
+   mass panel and the centre column on phones and small tablets, so it is dropped whole at <=679px
+   rather than allowed to push the speed value under the panel. The "SPEED" prefix goes last, at
+   <=359px. The sr-only copy inside the element carries the whole line at every width. */
+@media (max-width: 679px) {
   .gw-hud-speed .gw-speed-cap {
     display: none;
   }

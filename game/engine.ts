@@ -466,7 +466,7 @@ export function createWorld(opts: CreateWorldOptions): World {
  *        joinDelay. best = max(best, player.mass) while the player is alive.
  *     c. Player respawn: if the player is dead and respawnIn > 0: respawnIn -= dt; when it reaches
  *        <= 0: respawnIn = 0 and the player body is reset in place — mass startMass, radius,
- *        energy max, velocity 0, all timers/cooldowns/ult/power 0, lastHitBy "", shield
+ *        energy max, velocity 0, all timers/cooldowns/ult/power 0, sail 0, lastHitBy "", shield
  *        respawnShield, alive true, position = safeSpawn (below), px/py = x/y; stats kept
  *        (cumulative); emit {type:"respawn"}.
  *     d. Joins: for each body index i with joinIn[i] > 0: joinIn[i] -= dt; when <= 0: joinIn[i] =
@@ -1667,7 +1667,10 @@ function buildStandings(bodies: readonly Body[]): Standing[] {
   })
 }
 
-/** A body stops being alive: end its Singularity (with an event) and clear its power-ups. */
+/**
+ * A body stops being alive: end its Singularity (with an event), clear its power-ups, and drop
+ * any solar sail, so the current's speed bonus never survives a death.
+ */
 function leavePlay(b: Body, events: GameEvent[]): void {
   if (b.ultActive > 0) events.push({ type: "ultEnd", bodyId: b.id })
   b.ultActive = 0
